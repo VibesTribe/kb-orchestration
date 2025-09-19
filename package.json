@@ -1,0 +1,25 @@
+{
+  "name": "kb-orchestration",
+  "version": "0.1.0",
+  "description": "Automation pipeline for knowledgebase ingestion, enrichment, classification, and publishing.",
+  "type": "module",
+  "scripts": {
+    "pipeline": "node scripts/run-pipeline.js",
+    "ingest": "node scripts/ingest-raindrop.js",
+    "enrich": "node scripts/enrich.js",
+    "classify": "node scripts/classify.js",
+    "publish": "node scripts/publish.js",
+    "lint": "eslint scripts --ext .js",
+    "format": "prettier --write \"{scripts,docs}/**/*.{js,md}\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.11.1",
+    "prettier": "^3.3.3"
+  }
+}
