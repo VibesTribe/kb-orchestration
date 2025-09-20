@@ -8,23 +8,24 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Aggregate RSS and YouTube feeds tracked by the team (also configured in `config/sources.json`). Channel handles are resolved to channel IDs once and cached in `data/cache/youtube-handles.json`.
    - Drop raw payloads in `data/raw/YYYY-MM-DD/`. These files let later steps re-run idempotently.
 
-2. **Enrich**\n   - Normalise data across sources (Raindrop, YouTube, RSS).\n   - Generate summaries via OpenRouter (or fallback heuristic) and cache them in `data/cache/summaries.json`.\n   - Save enriched payloads to `data/enriched/<date>/<timestamp>/items.json`.\n   - (Future) add embeddings / topic classification.
+2. **Enrich**
+   - Normalise data across sources (Raindrop, YouTube, RSS).
+   - Generate summaries via OpenRouter (or fallback heuristic) and cache them in `data/cache/summaries.json`.
+   - Save enriched payloads to `data/enriched/<date>/<timestamp>/items.json`.
+   - (Future) add embeddings / topic classification.
 
 3. **Classify**
-   - Score each item for usefulness (High / Moderate / Archive).
-   - Link items to projects and topics, de-duplicate by canonical URL hash.
-   - Produce curated outputs in `data/curated/` including graph node/edge sets.
+   - Load project profiles from `projects/<project>/project.json` and accompanying `prd.md`.
+   - Evaluate usefulness tiers (HIGH / MODERATE / ARCHIVE) per project, capturing reasoning and suggested next steps.
+   - Write curated outputs to `data/curated/<date>/<timestamp>/items.json` and cache results in `data/cache/classification.json`.
 
 4. **Publish**
    - Commit `knowledge.json` and `knowledge.graph.json` back to `VibesTribe/knowledgebase`.
    - Optionally open a PR rather than pushing directly.
    - Upload digest-ready data for email notifications.
 
-5. **Digest (optional)**
+5. **Digest**
    - Format the curated set into a Brevo email payload.
-   - Send only when usefulness >= Moderate to keep the briefing concise.
+   - Send only when usefulness = Moderate to keep the briefing concise.
 
 The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
-
-
-

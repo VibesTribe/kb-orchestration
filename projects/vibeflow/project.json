@@ -1,0 +1,46 @@
+{
+  "name": "Vibeflow",
+  "status": "active",
+  "summary": "Human-in-the-loop AI orchestration system that keeps non-technical users in strategic control while automating modular agent workflows.",
+  "objectives": [
+    "Deliver lean, observable AI-assisted development workflows",
+    "Avoid bloat and vendor lock-in by choosing modular tools",
+    "Keep humans in control of planning, approvals, and production gates"
+  ],
+  "techStack": [
+    "TypeScript",
+    "React",
+    "Tailwind CSS",
+    "Node.js",
+    "Express",
+    "PostgreSQL",
+    "Docker",
+    "Google Cloud Run"
+  ],
+  "usefulnessCriteria": {
+    "high": [
+      "Directly improves agent orchestration, observability, or ROI analytics",
+      "Replaces heavy platforms with lean, modular alternatives aligned with Vibeflow philosophy",
+      "Provides actionable guidance for Supervisor, Analyst, or Maintenance agents"
+    ],
+    "moderate": [
+      "General AI tooling or workflow insights that can be adapted soon",
+      "Emerging research that could influence near-term planning or architecture",
+      "Design patterns that reinforce human-in-the-loop governance"
+    ],
+    "archive": [
+      "Interesting but not actionable within the next quarter",
+      "Tools or ideas that conflict with Vibeflow’s lean, modular stance",
+      "Content unrelated to software agent orchestration or non-coder empowerment"
+    ]
+  },
+  "promptHints": {
+    "classification": "Decide if the item is High, Moderate, or Archive usefulness for Vibeflow. Use the PRD and criteria to justify the rating, and suggest next steps when appropriate."
+  },
+  "sourceDocs": [
+    {
+      "type": "PRD",
+      "path": "./prd.md"
+    }
+  ]
+}

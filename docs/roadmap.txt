@@ -11,11 +11,11 @@ Orchestration Roadmap
    - Generate summaries with OpenRouter (cached in data/cache/summaries.json)
    - Output enriched payloads to data/enriched/<date>/<timestamp>/items.json
 
-3. Classification (Next)
-   - Create projects/<project>/project.json + prd.md + changelog.md
-   - Load project context, PRD, usefulness criteria
-   - Score each enriched item: project relevance, usefulness tier (High/Moderate/Archive), why_it_matters
-   - Persist results to data/curated/<date>/<timestamp>/items.json
+3. Classification (In Progress)
+   - Project profiles stored in projects/<project> (project.json + prd.md + changelog.md)
+   - Load project context, PRD, usefulness criteria, prompt hints
+   - Score each enriched item (High / Moderate / Archive), capture reasoning & next steps
+   - Persist results to data/curated/<date>/<timestamp>/items.json and cache classifications
 
 4. Publishing
    - Convert curated data into knowledge.json + knowledge.graph.json
