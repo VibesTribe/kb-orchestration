@@ -1,0 +1,43 @@
+Orchestration Roadmap
+=====================
+
+1. Ingest (Done)
+   - Sources configured via config/sources.json (Raindrop collections, YouTube playlists/handles, RSS feeds)
+   - Runs twice daily via GitHub Actions (03:00 & 13:00 UTC)
+   - Raw manifests stored under data/raw/<date>/<timestamp>/
+
+2. Enrich (Done)
+   - Normalize items across sources
+   - Generate summaries with OpenRouter (cached in data/cache/summaries.json)
+   - Output enriched payloads to data/enriched/<date>/<timestamp>/items.json
+
+3. Classification (Next)
+   - Create projects/<project>/project.json + prd.md + changelog.md
+   - Load project context, PRD, usefulness criteria
+   - Score each enriched item: project relevance, usefulness tier (High/Moderate/Archive), why_it_matters
+   - Persist results to data/curated/<date>/<timestamp>/items.json
+
+4. Publishing
+   - Convert curated data into knowledge.json + knowledge.graph.json
+   - Commit to VibesTribe/knowledgebase using KNOWLEDGEBASE_TOKEN
+   - Upload graph + digest artifacts (optional)
+
+5. Digest & Notifications
+   - Filter High/Moderate items per project
+   - Build daily Brevo email payload (10AM Waterloo)
+   - Include project change notes (from changelog)
+
+6. Admin UX (Future)
+   - Project dashboard in kb-site to view/edit project status, PRD
+   - Filters to view bookmarks by project, usefulness, source
+   - Buttons to trigger orchestrator workflows on demand
+
+7. Automation Enhancements
+   - Raindrop token refresh flow using client ID/secret + refresh token
+   - AI assistance to propose PRD updates / usefulness criteria changes
+
+Notes
+-----
+- Update cron timings in .github/workflows/pipeline.yml if schedule changes
+- Add new sources by editing config/sources.json (handles auto-resolve)
+- Run `npm run pipeline` locally for dry runs prior to enabling new stages
