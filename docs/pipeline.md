@@ -19,13 +19,14 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Evaluate usefulness tiers (HIGH / MODERATE / ARCHIVE) per project, capturing reasoning and suggested next steps.
    - Write curated outputs to `data/curated/<date>/<timestamp>/items.json` and cache results in `data/cache/classification.json`.
 
-4. **Publish**
+4. **Publish (In Progress)**
    - Commit `knowledge.json` and `knowledge.graph.json` back to `VibesTribe/knowledgebase`.
    - Optionally open a PR rather than pushing directly.
    - Upload digest-ready data for email notifications.
 
-5. **Digest**
+5. **Digest (Next)**
    - Format the curated set into a Brevo email payload.
    - Send only when usefulness = Moderate to keep the briefing concise.
 
 The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
+

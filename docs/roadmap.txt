@@ -17,12 +17,12 @@ Orchestration Roadmap
    - Score each enriched item (High / Moderate / Archive), capture reasoning & next steps
    - Persist results to data/curated/<date>/<timestamp>/items.json and cache classifications
 
-4. Publishing
+4. Publishing (In Progress)
    - Convert curated data into knowledge.json + knowledge.graph.json
    - Commit to VibesTribe/knowledgebase using KNOWLEDGEBASE_TOKEN
    - Upload graph + digest artifacts (optional)
 
-5. Digest & Notifications
+5. Digest & Notifications (Next)
    - Filter High/Moderate items per project
    - Build daily Brevo email payload (10AM Waterloo)
    - Include project change notes (from changelog)
@@ -41,3 +41,4 @@ Notes
 - Update cron timings in .github/workflows/pipeline.yml if schedule changes
 - Add new sources by editing config/sources.json (handles auto-resolve)
 - Run `npm run pipeline` locally for dry runs prior to enabling new stages
+
