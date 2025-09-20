@@ -1,4 +1,4 @@
-import { ingestRaindrop } from "./ingest-raindrop.js";
+import { ingest } from "./ingest.js";
 import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
 import { publish } from "./publish.js";
@@ -10,7 +10,7 @@ function logStep(message) {
 
 export async function runPipeline() {
   const steps = [
-    { name: "Ingest", fn: ingestRaindrop },
+    { name: "Ingest", fn: ingest },
     { name: "Enrich", fn: enrich },
     { name: "Classify", fn: classify },
     { name: "Publish", fn: publish }
@@ -29,3 +29,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+

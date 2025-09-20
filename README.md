@@ -8,6 +8,7 @@ knowledge artifacts consumed by [`kb-site`](https://github.com/VibesTribe/kb-sit
 ```
 .github/workflows/        # GitHub Actions that run the pipeline
 config/.env.example       # Template of environment variables required locally
+config/sources.json       # List of Raindrop collections, YouTube playlists, RSS feeds to ingest
 scripts/                  # Node-based orchestration steps (ingest ? publish)
 docs/                     # Design notes and operational guides
 ```
@@ -22,7 +23,8 @@ npm install
 npm run pipeline # executes the placeholder pipeline locally
 ```
 
-Copy `config/.env.example` to `.env` (not tracked) and populate secrets such as `RAINDROP_TOKEN`, `GEMINI_API_KEY`,
+Copy `config/.env.example` to `.env`
+and update `config/sources.json` with your collection IDs, playlists, and feed URLs (not tracked) and populate secrets such as `RAINDROP_TOKEN`, `GEMINI_API_KEY`,
 and `KNOWLEDGEBASE_REPO` when real implementations are added.
 
 ## Planned pipeline stages
@@ -52,3 +54,4 @@ Secrets required by the workflow will include (names subject to change):
 
 This skeleton keeps the repo ready for incremental development: implement each script, wire tests/linting, then expand
 the workflow with caching, notifications, and failure alerts.
+

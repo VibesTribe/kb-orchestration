@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "pipeline": "node scripts/run-pipeline.js",
-    "ingest": "node scripts/ingest-raindrop.js",
+    "ingest": "node scripts/ingest.js",
     "enrich": "node scripts/enrich.js",
     "classify": "node scripts/classify.js",
     "publish": "node scripts/publish.js",
@@ -16,10 +16,12 @@
     "node": ">=20"
   },
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "rss-parser": "^3.12.0"
   },
   "devDependencies": {
     "eslint": "^9.11.1",
     "prettier": "^3.3.3"
   }
 }
+

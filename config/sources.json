@@ -1,0 +1,22 @@
+{
+  "raindrop": {
+    "collectionIds": [
+      "0"
+    ],
+    "perPage": 100
+  },
+  "youtube": {
+    "playlistIds": [
+      "PLAYLIST_ID_GOES_HERE"
+    ],
+    "channelIds": [
+      "CHANNEL_ID_GOES_HERE"
+    ]
+  },
+  "rss": [
+    {
+      "id": "example-ai-blog",
+      "url": "https://example.com/ai/feed"
+    }
+  ]
+}
