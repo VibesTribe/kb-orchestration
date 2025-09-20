@@ -5,7 +5,7 @@ intermediate data to the `data/` tree in this repository (ignored by git).
 
 1. **Ingest**
    - Pull bookmarks from Raindrop (collections defined in `config/sources.json`).
-   - Aggregate RSS and YouTube feeds tracked by the team (also configured in `config/sources.json`).
+   - Aggregate RSS and YouTube feeds tracked by the team (also configured in `config/sources.json`). Channel handles are resolved to channel IDs once and cached in `data/cache/youtube-handles.json`.
    - Drop raw payloads in `data/raw/YYYY-MM-DD/`. These files let later steps re-run idempotently.
 
 2. **Enrich**
@@ -28,4 +28,5 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Send only when usefulness >= Moderate to keep the briefing concise.
 
 The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
+
 

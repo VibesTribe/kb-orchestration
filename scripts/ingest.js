@@ -8,6 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const CONFIG_PATH = path.join(ROOT_DIR, "config", "sources.json");
 const DATA_ROOT = path.join(ROOT_DIR, "data", "raw");
+const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
+const HANDLE_CACHE_PATH = path.join(CACHE_ROOT, "youtube-handles.json");
 
 const DEFAULT_DATE = new Date();
 const RUN_STAMP = DEFAULT_DATE.toISOString().replace(/[:.]/g, "-");
@@ -60,9 +62,11 @@ async function ingestRaindropSource(config) {
 
   const results = [];
   for (const collectionId of collectionIds) {
+    const sanitizedCollectionId = sanitize(collectionId);
+    if (!sanitizedCollectionId) continue;
     log("Fetching Raindrop collection", { collectionId });
     const items = await fetchRaindropCollection(collectionId, perPage, token);
-    const filePath = path.join(RUN_DIR, `raindrop-${sanitize(collectionId)}.json`);
+    const filePath = path.join(RUN_DIR, `raindrop-${sanitizedCollectionId}.json`);
     await fs.writeFile(filePath, JSON.stringify(items, null, 2), "utf8");
     results.push({ type: "raindrop", collectionId, count: items.length, filePath });
   }
@@ -103,26 +107,77 @@ async function ingestYoutubeSource(config) {
   }
 
   const playlistIds = config?.playlistIds ?? [];
-  const channelIds = config?.channelIds ?? [];
+  const configuredChannelIds = config?.channelIds ?? [];
+  const channelHandles = config?.channelHandles ?? [];
+
   const results = [];
 
   for (const playlistId of playlistIds) {
     if (!playlistId || playlistId.includes("GOES_HERE")) continue;
+    const sanitizedId = sanitize(playlistId);
     log("Fetching YouTube playlist", { playlistId });
     const playlistItems = await fetchYoutubePlaylist(playlistId, apiKey);
-    const filePath = path.join(RUN_DIR, `youtube-playlist-${sanitize(playlistId)}.json`);
+    const filePath = path.join(RUN_DIR, `youtube-playlist-${sanitizedId}.json`);
     await fs.writeFile(filePath, JSON.stringify(playlistItems, null, 2), "utf8");
     results.push({ type: "youtube-playlist", playlistId, count: playlistItems.length, filePath });
   }
 
-  for (const channelId of channelIds) {
+  const handleCache = await loadHandleCache();
+  const resolvedHandles = {};
+  const channelIdsFromHandles = [];
+
+  for (const rawHandle of channelHandles) {
+    const handle = normalizeHandle(rawHandle);
+    if (!handle) continue;
+
+    if (handleCache[handle]) {
+      channelIdsFromHandles.push(handleCache[handle]);
+      resolvedHandles[handleCache[handle]] = handle;
+      continue;
+    }
+
+    try {
+      const channelId = await resolveChannelId(handle, apiKey);
+      if (channelId) {
+        channelIdsFromHandles.push(channelId);
+        resolvedHandles[channelId] = handle;
+        handleCache[handle] = channelId;
+        log("Resolved YouTube handle", { handle, channelId });
+      } else {
+        log("Could not resolve YouTube handle", { handle });
+      }
+    } catch (error) {
+      log("Failed to resolve YouTube handle", { handle, error: error.message });
+    }
+  }
+
+  if (Object.keys(resolvedHandles).length) {
+    await saveHandleCache(handleCache);
+  }
+
+  const dedupedChannelIds = new Set();
+  for (const channelId of [...configuredChannelIds, ...channelIdsFromHandles]) {
     if (!channelId || channelId.includes("GOES_HERE")) continue;
+    dedupedChannelIds.add(channelId);
+  }
+
+  for (const channelId of dedupedChannelIds) {
     const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-    log("Fetching YouTube channel RSS", { channelId });
-    const feed = await parser.parseURL(feedUrl);
-    const filePath = path.join(RUN_DIR, `youtube-channel-${sanitize(channelId)}.json`);
-    await fs.writeFile(filePath, JSON.stringify(feed, null, 2), "utf8");
-    results.push({ type: "youtube-channel", channelId, count: feed.items?.length ?? 0, filePath });
+    log("Fetching YouTube channel RSS", { channelId, handle: resolvedHandles[channelId] });
+    try {
+      const feed = await parser.parseURL(feedUrl);
+      const filePath = path.join(RUN_DIR, `youtube-channel-${sanitize(channelId)}.json`);
+      await fs.writeFile(filePath, JSON.stringify(feed, null, 2), "utf8");
+      results.push({
+        type: "youtube-channel",
+        channelId,
+        handle: resolvedHandles[channelId],
+        count: feed.items?.length ?? 0,
+        filePath
+      });
+    } catch (error) {
+      log("Failed to fetch YouTube channel feed", { channelId, error: error.message });
+    }
   }
 
   return results;
@@ -153,20 +208,63 @@ async function ingestRssFeeds(feeds = []) {
   for (const feed of feeds) {
     if (!feed?.url || feed.url.includes("example.com")) continue;
     log("Fetching RSS feed", { feed: feed.id ?? feed.url });
-    const parsed = await parser.parseURL(feed.url);
-    const filePath = path.join(RUN_DIR, `rss-${sanitize(feed.id ?? "feed")}.json`);
-    await fs.writeFile(filePath, JSON.stringify(parsed, null, 2), "utf8");
-    results.push({ type: "rss", id: feed.id ?? feed.url, count: parsed.items?.length ?? 0, filePath });
+    try {
+      const parsed = await parser.parseURL(feed.url);
+      const filePath = path.join(RUN_DIR, `rss-${sanitize(feed.id ?? "feed")}.json`);
+      await fs.writeFile(filePath, JSON.stringify(parsed, null, 2), "utf8");
+      results.push({ type: "rss", id: feed.id ?? feed.url, count: parsed.items?.length ?? 0, filePath });
+    } catch (error) {
+      log("Failed to fetch RSS feed", { feed: feed.id ?? feed.url, error: error.message });
+    }
   }
   return results;
 }
 
 function sanitize(value) {
+  if (value === undefined || value === null) return "";
   return String(value).replace(/[^a-z0-9\-_.]/gi, "_").toLowerCase();
+}
+
+function normalizeHandle(rawHandle) {
+  if (!rawHandle) return null;
+  let handle = rawHandle.trim();
+  handle = handle.replace(/^https?:\/\/(www\.)?youtube\.com\/@/i, "");
+  handle = handle.replace(/^@/, "");
+  handle = handle.split(/[/?#]/)[0];
+  if (!handle || handle.includes("GOES_HERE")) return null;
+  return handle;
+}
+
+async function loadHandleCache() {
+  try {
+    const raw = await fs.readFile(HANDLE_CACHE_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveHandleCache(cache) {
+  await ensureDirectory(CACHE_ROOT);
+  await fs.writeFile(HANDLE_CACHE_PATH, JSON.stringify(cache, null, 2), "utf8");
+}
+
+async function resolveChannelId(handle, apiKey) {
+  const url = new URL("https://www.googleapis.com/youtube/v3/search");
+  url.searchParams.set("part", "snippet");
+  url.searchParams.set("type", "channel");
+  url.searchParams.set("q", `@${handle}`);
+  url.searchParams.set("maxResults", "1");
+  url.searchParams.set("key", apiKey);
+
+  const json = await fetchJson(url);
+  const hit = json.items?.[0];
+  return hit?.snippet?.channelId ?? hit?.id?.channelId ?? null;
 }
 
 export async function ingest() {
   await ensureDirectory(RUN_DIR);
+  await ensureDirectory(CACHE_ROOT);
   const config = await loadSourceConfig();
   const manifest = {
     startedAt: new Date().toISOString(),
@@ -195,6 +293,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
-
-

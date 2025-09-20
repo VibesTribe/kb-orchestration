@@ -7,16 +7,86 @@
   },
   "youtube": {
     "playlistIds": [
-      "PLAYLIST_ID_GOES_HERE"
+      "PLYbEaHqVPm4u1dw5SiA5NETALRykvP2tn",
+      "PLYbEaHqVPm4u_91Nd4IHzyv4i2mKf0xPq"
     ],
-    "channelIds": [
-      "CHANNEL_ID_GOES_HERE"
+    "channelIds": [],
+    "channelHandles": [
+      "indydevdan",
+      "ColeMedin",
+      "iamseankochel",
+      "GosuCoder",
+      "DavidOndrej",
+      "vrsen",
+      "soloswiftcrafter",
+      "DevelopersDigest",
+      "matthew_berman",
+      "MervinPraison",
+      "theailifestyle",
+      "AllAboutAI",
+      "code4AI",
+      "JulianGoldieSEO",
+      "AIJasonZ",
+      "BMadCode",
+      "nicksaraev",
+      "AILABS-393",
+      "nateherk",
+      "AIOriented",
+      "adrianchinghc",
+      "AICodeKing",
+      "TheAIAutomators",
+      "airevolutionx",
+      "NateBJones",
+      "MetalSole",
+      "AI-GPTWorkshop",
+      "CreatorMagicAI",
+      "TechWithTim",
+      "Mark_Kashef",
+      "AIDailyBrief",
+      "convex-dev",
+      "d-squared70",
+      "engineerprompt",
+      "fahdmirza",
+      "AlexFinnOfficial",
+      "TheMetaverseGuy",
+      "DarrenBuildsAI",
+      "1littlecoder",
+      "aiexplained-official",
+      "aiadvantage",
+      "code4A",
+      "rabbitmetrics",
+      "WhatsAI",
+      "intheworldofai"
     ]
   },
   "rss": [
     {
-      "id": "example-ai-blog",
-      "url": "https://example.com/ai/feed"
+      "id": "huggingface",
+      "url": "https://huggingface.co/blog/feed.xml"
+    },
+    {
+      "id": "deepmind",
+      "url": "https://deepmind.google/blog/rss.xml"
+    },
+    {
+      "id": "hackernoon-ai",
+      "url": "https://hackernoon.com/tagged/ai/feed"
+    },
+    {
+      "id": "techxplore-ml",
+      "url": "https://techxplore.com/rss-feed/machine-learning-ai-news/"
+    },
+    {
+      "id": "synthedia",
+      "url": "https://synthedia.substack.com/feed"
+    },
+    {
+      "id": "algorithmic-bridge",
+      "url": "https://www.thealgorithmicbridge.com/feed"
+    },
+    {
+      "id": "aihub",
+      "url": "https://aihub.org/feed/?cat=-473"
     }
   ]
 }
