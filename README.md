@@ -38,7 +38,7 @@ status), a `prd.md` (canonical PRD text), and optionally a `changelog.md`. Set `
 1. **Ingest** – pull Raindrop bookmarks, RSS feeds, and YouTube updates into a raw queue.
 2. **Enrich** – normalise data, call OpenRouter (or fallback) to generate summaries, cache them in
    `data/cache/summaries.json`, and write `data/enriched/<date>/<timestamp>/items.json`.
-3. **Classify** – load project profiles, evaluate usefulness (High / Moderate / Archive) with OpenRouter or heuristics,
+3. **Classify** – load project profiles & PRDs, evaluate usefulness (High/Moderate/Archive) with OpenRouter fallback, and write `data/curated/<date>/<timestamp>/items.json`.
    and write curated results to `data/curated/<date>/<timestamp>/items.json`.
 4. **Publish** – update the [`VibesTribe/knowledgebase`](https://github.com/VibesTribe/knowledgebase) repo with curated
    JSON and graph outputs; optionally trigger Brevo digest builds.
@@ -73,3 +73,4 @@ project files each run.
 
 Enrichment output is written to `data/enriched/<date>/<timestamp>/items.json` and summaries are cached in
 `data/cache/summaries.json` to avoid re-sending unchanged items to OpenRouter.
+\n\n### OpenRouter model fallback\n- Set `OPENROUTER_MODEL` for your preferred model\n- Optionally set `OPENROUTER_MODEL_CHAIN` (comma-separated) for additional fallbacks\n- Defaults to: xai/grok-4-f ? deepseek/deepseek-v3.1 ? nvidia/nemotron-nano-9b-v2 ? mistralai/mistral-7b-instruct\n

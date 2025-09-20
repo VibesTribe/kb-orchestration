@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { callOpenRouter } from "./lib/openrouter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -12,9 +13,6 @@ const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
 const SUMMARY_CACHE_PATH = path.join(CACHE_ROOT, "summaries.json");
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? "mistralai/mistral-7b-instruct:latest";
-const OPENROUTER_REFERRER = process.env.OPENROUTER_REFERRER ?? "https://github.com/VibesTribe/kb-orchestration";
-const OPENROUTER_TITLE = process.env.OPENROUTER_TITLE ?? "kb-orchestration";
 
 function log(message, context = {}) {
   const timestamp = new Date().toISOString();
@@ -80,7 +78,6 @@ export async function enrich() {
   const output = {
     generatedAt: new Date().toISOString(),
     inputManifest: path.relative(ROOT_DIR, manifestPath),
-    model: OPENROUTER_MODEL,
     itemCount: enrichedItems.length,
     items: enrichedItems
   };
@@ -213,38 +210,22 @@ async function generateSummary(item) {
   }
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": OPENROUTER_REFERRER,
-        "X-Title": OPENROUTER_TITLE
+    const { content, model } = await callOpenRouter([
+      {
+        role: "system",
+        content:
+          "You summarise research signals for an internal knowledgebase. Provide a concise, actionable summary (max 3 sentences) highlighting why the item matters."
       },
-      body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You summarise research signals for an internal knowledgebase. Provide a concise, actionable summary (max 3 sentences) highlighting why the item matters."
-          },
-          {
-            role: "user",
-            content: baseText
-          }
-        ],
-        max_tokens: 180,
-        temperature: 0.2
-      })
+      {
+        role: "user",
+        content: baseText
+      }
+    ], {
+      maxTokens: 180,
+      temperature: 0.2
     });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(errText);
-    }
-    const json = await response.json();
-    return json.choices?.[0]?.message?.content?.trim() ?? truncate(baseText, 280);
+    log("Generated summary", { model });
+    return content.trim();
   } catch (error) {
     log("OpenRouter summarisation failed", { error: error.message, title: item.title });
     return truncate(baseText, 280);

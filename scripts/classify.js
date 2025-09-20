@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { callOpenRouter } from "./lib/openrouter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -13,9 +14,6 @@ const CLASSIFICATION_CACHE_PATH = path.join(CACHE_ROOT, "classification.json");
 const PROJECTS_ROOT = path.join(ROOT_DIR, "projects");
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? "mistralai/mistral-7b-instruct:latest";
-const OPENROUTER_REFERRER = process.env.OPENROUTER_REFERRER ?? "https://github.com/VibesTribe/kb-orchestration";
-const OPENROUTER_TITLE = process.env.OPENROUTER_TITLE ?? "kb-orchestration";
 
 function log(message, context = {}) {
   const timestamp = new Date().toISOString();
@@ -110,39 +108,21 @@ async function classifyWithModel(item, project) {
   const prompt = buildClassificationPrompt(item, project);
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": OPENROUTER_REFERRER,
-        "X-Title": OPENROUTER_TITLE
+    const { content, model } = await callOpenRouter([
+      {
+        role: "system",
+        content:
+          "You classify research signals for the Vibeflow knowledgebase. Respond in JSON with usefulness (HIGH, MODERATE, ARCHIVE), reason, and optional next_steps."
       },
-      body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You classify research signals for the Vibeflow knowledgebase. Respond in JSON with usefulness (HIGH, MODERATE, ARCHIVE), reason, and optional next_steps."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        max_tokens: 220,
-        temperature: 0.1
-      })
+      {
+        role: "user",
+        content: prompt
+      }
+    ], {
+      maxTokens: 220,
+      temperature: 0.1
     });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(errText);
-    }
-
-    const json = await response.json();
-    const content = json.choices?.[0]?.message?.content ?? "";
+    log("Classified item", { model, title: item.title, project: project.name });
     const parsed = parseModelJson(content);
     return normalizeAssessment(parsed, project, item);
   } catch (error) {
@@ -217,7 +197,6 @@ function parseModelJson(content) {
     }
   }
 
-  // Attempt to extract JSON from the content if the model wrapped it in code fences
   const match = trimmed.match(/\{[\s\S]*\}/);
   if (match) {
     try {
