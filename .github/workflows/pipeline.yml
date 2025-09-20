@@ -3,7 +3,10 @@ name: Orchestrate Knowledgebase
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 9 * * *"
+    # 11:00 PM (previous day) Waterloo time ≈ 03:00 UTC
+    - cron: "0 3 * * *"
+    # 09:00 AM Waterloo time ≈ 13:00 UTC
+    - cron: "0 13 * * *"
 
 jobs:
   run-pipeline:
@@ -24,6 +27,7 @@ jobs:
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
         run: npm run pipeline
 
@@ -34,3 +38,4 @@ jobs:
           name: pipeline-logs
           path: logs/
           if-no-files-found: ignore
+
