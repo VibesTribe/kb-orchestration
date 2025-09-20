@@ -24,9 +24,15 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Optionally open a PR rather than pushing directly.
    - Upload digest-ready data for email notifications.
 
-5. **Digest (Next)**
+5. **Digest (In Progress)**
+   - Build Brevo-ready summaries from curated data (High/Moderate per project).
+   - Include changelog highlights and next steps.
+   - Deliver emails to configured recipients (10 AM Waterloo).
+
+The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
    - Format the curated set into a Brevo email payload.
    - Send only when usefulness = Moderate to keep the briefing concise.
 
 The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
+
 

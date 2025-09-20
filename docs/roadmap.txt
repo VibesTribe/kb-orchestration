@@ -22,7 +22,7 @@ Orchestration Roadmap
    - Commit to VibesTribe/knowledgebase using KNOWLEDGEBASE_TOKEN
    - Upload graph + digest artifacts (optional)
 
-5. Digest & Notifications (Next)
+5. Digest & Notifications (In Progress)
    - Filter High/Moderate items per project
    - Build daily Brevo email payload (10AM Waterloo)
    - Include project change notes (from changelog)
@@ -41,4 +41,5 @@ Notes
 - Update cron timings in .github/workflows/pipeline.yml if schedule changes
 - Add new sources by editing config/sources.json (handles auto-resolve)
 - Run `npm run pipeline` locally for dry runs prior to enabling new stages
+
 

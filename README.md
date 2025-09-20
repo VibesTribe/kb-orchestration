@@ -74,3 +74,4 @@ project files each run.
 Enrichment output is written to `data/enriched/<date>/<timestamp>/items.json` and summaries are cached in
 `data/cache/summaries.json` to avoid re-sending unchanged items to OpenRouter.
 \n\n### OpenRouter model fallback\n- Set `OPENROUTER_MODEL` for your preferred model\n- Optionally set `OPENROUTER_MODEL_CHAIN` (comma-separated) for additional fallbacks\n- Defaults to: xai/grok-4-f ? deepseek/deepseek-v3.1 ? nvidia/nemotron-nano-9b-v2 ? mistralai/mistral-7b-instruct\n
+

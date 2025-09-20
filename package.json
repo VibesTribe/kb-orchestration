@@ -9,6 +9,7 @@
     "enrich": "node scripts/enrich.js",
     "classify": "node scripts/classify.js",
     "publish": "node scripts/publish.js",
+    "digest": "node scripts/digest.js",
     "lint": "eslint scripts --ext .js",
     "format": "prettier --write \"{scripts,docs}/**/*.{js,md}\""
   },
@@ -24,4 +25,3 @@
     "prettier": "^3.3.3"
   }
 }
-
