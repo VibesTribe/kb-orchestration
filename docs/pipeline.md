@@ -8,10 +8,7 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Aggregate RSS and YouTube feeds tracked by the team (also configured in `config/sources.json`). Channel handles are resolved to channel IDs once and cached in `data/cache/youtube-handles.json`.
    - Drop raw payloads in `data/raw/YYYY-MM-DD/`. These files let later steps re-run idempotently.
 
-2. **Enrich**
-   - Generate summaries and embeddings with a low-cost model (Gemini 1.5 Flash or an OSS runner).
-   - Detect topics, subtopics, project relevance hints.
-   - Save results to `data/enriched/` with versioned filenames.
+2. **Enrich**\n   - Normalise data across sources (Raindrop, YouTube, RSS).\n   - Generate summaries via OpenRouter (or fallback heuristic) and cache them in `data/cache/summaries.json`.\n   - Save enriched payloads to `data/enriched/<date>/<timestamp>/items.json`.\n   - (Future) add embeddings / topic classification.
 
 3. **Classify**
    - Score each item for usefulness (High / Moderate / Archive).
@@ -28,5 +25,6 @@ intermediate data to the `data/` tree in this repository (ignored by git).
    - Send only when usefulness >= Moderate to keep the briefing concise.
 
 The pipeline should remain idempotent: re-running on the same day should not duplicate entries.
+
 
 

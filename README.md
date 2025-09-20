@@ -16,12 +16,7 @@ docs/                     # Design notes and operational guides
 Runtime data (e.g., `data/raw`, `data/enriched`) is ignored via `.gitignore` so that runs remain idempotent without
 polluting git history.
 
-## Getting started
-
-```bash
-npm install
-npm run pipeline # executes the placeholder pipeline locally
-```
+## Getting started\n\n```bash\nnpm install\nnpm run pipeline # executes ingest ? enrich ? classify ? publish locally\n```
 
 Copy `config/.env.example` to `.env`
 and update `config/sources.json` with your collection IDs, playlists, channel IDs or @handles (the pipeline resolves handles automatically), and feed URLs (not tracked) and populate secrets such as `RAINDROP_TOKEN`, `GEMINI_API_KEY`,
@@ -43,13 +38,7 @@ The starter workflow (`.github/workflows/pipeline.yml`) runs on schedule and man
 executes `npm run pipeline`, and will eventually commit artifacts to the knowledgebase repository once the publish step
 is implemented.
 
-Secrets required by the workflow will include (names subject to change):
-
-- `RAINDROP_TOKEN` – Raindrop API key
-- `GEMINI_API_KEY` – Google AI Studio key used for summarisation / embeddings
-- `BREVO_API_KEY` – Email digest delivery
-- `KNOWLEDGEBASE_TOKEN` – fine-grained PAT or deploy key with push rights to the knowledgebase repo
-
+Secrets required by the workflow include:\n\n- `RAINDROP_TOKEN` – Raindrop access token\n- `YOUTUBE_API_KEY` – YouTube Data API key (playlist + channel resolution)\n- `OPENROUTER_API_KEY` – model access for enrichment summaries (set `OPENROUTER_MODEL` if you prefer a different model)\n- `BREVO_API_KEY` – Email digest delivery\n- `KNOWLEDGEBASE_TOKEN` – fine-grained PAT or deploy key with push rights to the knowledgebase repo\n
 ---
 
 This skeleton keeps the repo ready for incremental development: implement each script, wire tests/linting, then expand
@@ -57,3 +46,5 @@ the workflow with caching, notifications, and failure alerts.
 
 
 
+
+\nEnrichment output is written to \\data/enriched/<date>/<timestamp>/items.json\\ and summaries are cached in \\data/cache/summaries.json\\ to avoid re-sending unchanged items to OpenRouter.
