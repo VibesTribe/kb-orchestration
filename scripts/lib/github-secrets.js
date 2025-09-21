@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import nacl from "tweetnacl";
+import sodium from "tweetsodium";
 
 const owner = process.env.GITHUB_REPOSITORY?.split("/")[0];
 const repo = process.env.GITHUB_REPOSITORY?.split("/")[1];
@@ -60,7 +60,7 @@ async function getPublicKey() {
 function encryptSecret(secretValue, base64PublicKey) {
   const messageBytes = Buffer.from(secretValue);
   const keyBytes = Buffer.from(base64PublicKey, "base64");
-  const encrypted = nacl.box.seal(messageBytes, keyBytes);
-  return Buffer.from(encrypted).toString("base64");
+  const encryptedBytes = sodium.seal(messageBytes, keyBytes);
+  return Buffer.from(encryptedBytes).toString("base64");
 }
 
