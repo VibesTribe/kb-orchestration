@@ -1,0 +1,24 @@
+Progress Snapshot – 2025-09-20
+==============================
+
+kb-orchestration
+----------------
+- Ingest ? Enrich ? Classify ? Publish ? Digest stages complete and scheduled.
+- OpenRouter fallback chain in place (grok-4-f ? deepseek-v3.1 ? nemotron-nano-9b-v2 ? mistral-7b).
+- Raindrop token refresh workflow runs every 10 days and updates `RAINDROP_TOKEN`.
+- Publish pushes `knowledge.json` / `knowledge.graph.json` to VibesTribe/knowledgebase when `KNOWLEDGEBASE_TOKEN` is present.
+- Digest generates artifacts and emails via Brevo when secrets are configured.
+
+kb-site
+-------
+- Styling locked in from recent redesign.
+- Working on wiring live classification data + project/usefulness filters into `App.tsx`.
+- Builds fail currently because old + new JSX blocks coexist; need to finish cleanup.
+- `final vibeflow prd.txt` is staged but will be removed once UI work finishes.
+
+Next Steps
+----------
+1. Clean `src/App.tsx` so the new card layout compiles and uses live assignments.
+2. Remove the redundant PRD file from kb-site.
+3. Commit/push kb-site once `npm run build` passes.
+4. After UI cleanup, move on to admin UX (project controls/model usage) and further automation enhancements.
