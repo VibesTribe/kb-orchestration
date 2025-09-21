@@ -9,6 +9,7 @@
     "enrich": "node scripts/enrich.js",
     "classify": "node scripts/classify.js",
     "publish": "node scripts/publish.js",
+    "refresh-raindrop": "node scripts/refresh-raindrop.js",
     "digest": "node scripts/digest.js",
     "lint": "eslint scripts --ext .js",
     "format": "prettier --write \"{scripts,docs}/**/*.{js,md}\""
@@ -18,10 +19,12 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "rss-parser": "^3.12.0"
+    "rss-parser": "^3.12.0",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "eslint": "^9.11.1",
     "prettier": "^3.3.3"
   }
 }
+

@@ -32,8 +32,8 @@ Orchestration Roadmap
    - Filters to view bookmarks by project, usefulness, source
    - Buttons to trigger orchestrator workflows on demand
 
-7. Automation Enhancements
-   - Raindrop token refresh flow using client ID/secret + refresh token
+7. Automation Enhancements (In Progress)
+   - Raindrop token refresh flow using client ID/secret + refresh token (Done)
    - AI assistance to propose PRD updates / usefulness criteria changes
 
 Notes
@@ -41,5 +41,6 @@ Notes
 - Update cron timings in .github/workflows/pipeline.yml if schedule changes
 - Add new sources by editing config/sources.json (handles auto-resolve)
 - Run `npm run pipeline` locally for dry runs prior to enabling new stages
+
 
 

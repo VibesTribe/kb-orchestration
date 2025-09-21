@@ -1,0 +1,32 @@
+name: Refresh Raindrop Token
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 */10 * *"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh Raindrop token
+        run: npm run refresh-raindrop
+        env:
+          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
+          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
+          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
