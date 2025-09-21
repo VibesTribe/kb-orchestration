@@ -28,6 +28,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
         run: npm run pipeline
 
@@ -38,4 +39,5 @@ jobs:
           name: pipeline-logs
           path: logs/
           if-no-files-found: ignore
+
 

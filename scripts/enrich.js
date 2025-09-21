@@ -37,7 +37,14 @@ export async function enrich() {
   const enrichedItems = [];
 
   for (const source of manifest.sources ?? []) {
-    const absolutePath = path.join(ROOT_DIR, source.filePath ?? "");
+    let absolutePath = source.filePath ?? "";
+    if (!absolutePath) {
+      log("Ingest source missing file path", { source });
+      continue;
+    }
+    if (!path.isAbsolute(absolutePath)) {
+      absolutePath = path.join(ROOT_DIR, absolutePath);
+    }
     const exists = await fileExists(absolutePath);
     if (!exists) {
       log("Source file missing during enrichment", { file: absolutePath });
@@ -299,3 +306,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+

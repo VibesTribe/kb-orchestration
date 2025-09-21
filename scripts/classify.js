@@ -226,6 +226,14 @@ function normalizeAssessment(parsed, project, item) {
   };
 }
 
+
+function truncate(text, limit) {
+  if (!text) return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 3)}...`;
+}
+
 async function loadProjects() {
   const entries = await listDirectories(PROJECTS_ROOT);
   const projects = [];
@@ -311,3 +319,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+
