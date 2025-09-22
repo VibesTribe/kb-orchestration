@@ -16,8 +16,18 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 function log(message, context = {}) {
   const timestamp = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
+  const payload =
+    Object.keys(context).length > 0 ? ` ${JSON.stringify(context)}` : "";
   console.log(`[${timestamp}] ${message}${payload}`);
+}
+
+// --- NEW sanitize helper ---
+function sanitize(str) {
+  return String(str)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60); // keep IDs shortish
 }
 
 export async function enrich() {
@@ -69,7 +79,7 @@ export async function enrich() {
           updatedAt: new Date().toISOString(),
           title: item.title,
           url: item.url,
-          sourceType: item.sourceType
+          sourceType: item.sourceType,
         };
       }
 
@@ -77,8 +87,15 @@ export async function enrich() {
       enrichedItems.push({
         ...item,
         canonicalId,
-        summary
+        summary,
       });
+
+      // checkpoint after every item
+      await fs.writeFile(
+        SUMMARY_CACHE_PATH,
+        JSON.stringify(summaryCache, null, 2),
+        "utf8"
+      );
     }
   }
 
@@ -86,13 +103,15 @@ export async function enrich() {
     generatedAt: new Date().toISOString(),
     inputManifest: path.relative(ROOT_DIR, manifestPath),
     itemCount: enrichedItems.length,
-    items: enrichedItems
+    items: enrichedItems,
   };
 
   const itemsPath = path.join(enrichedRunDir, "items.json");
   await fs.writeFile(itemsPath, JSON.stringify(output, null, 2), "utf8");
-  await fs.writeFile(SUMMARY_CACHE_PATH, JSON.stringify(summaryCache, null, 2), "utf8");
-  log("Enrichment complete", { itemsPath: path.relative(ROOT_DIR, itemsPath), count: enrichedItems.length });
+  log("Enrichment complete", {
+    itemsPath: path.relative(ROOT_DIR, itemsPath),
+    count: enrichedItems.length,
+  });
 }
 
 async function getLatestIngestRun() {
@@ -135,7 +154,9 @@ function normalizeRaindropItems(items, source) {
   return items.map((item) => ({
     id: `raindrop-${item._id ?? item.link}`,
     sourceType: "raindrop",
-    sourceId: String(source.collectionId ?? item.collection?.$id ?? "unknown"),
+    sourceId: String(
+      source.collectionId ?? item.collection?.$id ?? "unknown"
+    ),
     title: item.title ?? item.link ?? "Untitled bookmark",
     url: item.link ?? null,
     description: item.excerpt ?? "",
@@ -143,7 +164,7 @@ function normalizeRaindropItems(items, source) {
     authors: item.author ? [item.author] : [],
     tags: Array.isArray(item.tags) ? item.tags : [],
     thumbnail: item.cover ?? null,
-    raw: item
+    raw: item,
   }));
 }
 
@@ -152,21 +173,29 @@ function normalizeYoutubePlaylistItems(items, source) {
   return items.map((entry) => {
     const snippet = entry.snippet ?? {};
     const content = entry.contentDetails ?? {};
-    const videoId = content.videoId ?? snippet.resourceId?.videoId ?? entry.id;
-    const channelTitle = snippet.videoOwnerChannelTitle || snippet.channelTitle;
-    const publishedAt = content.videoPublishedAt ?? snippet.publishedAt ?? null;
+    const videoId =
+      content.videoId ?? snippet.resourceId?.videoId ?? entry.id;
+    const channelTitle =
+      snippet.videoOwnerChannelTitle || snippet.channelTitle;
+    const publishedAt =
+      content.videoPublishedAt ?? snippet.publishedAt ?? null;
     return {
       id: `youtube-playlist-${videoId}`,
       sourceType: "youtube-playlist",
       sourceId: source.playlistId ?? source.playlistID ?? "unknown-playlist",
       title: snippet.title ?? "Untitled video",
-      url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : snippet.resourceId?.videoId ?? null,
+      url: videoId
+        ? `https://www.youtube.com/watch?v=${videoId}`
+        : snippet.resourceId?.videoId ?? null,
       description: snippet.description ?? "",
       publishedAt,
       authors: channelTitle ? [channelTitle] : [],
       tags: Array.isArray(snippet.tags) ? snippet.tags : [],
-      thumbnail: snippet.thumbnails?.high?.url ?? snippet.thumbnails?.default?.url ?? null,
-      raw: entry
+      thumbnail:
+        snippet.thumbnails?.high?.url ??
+        snippet.thumbnails?.default?.url ??
+        null,
+      raw: entry,
     };
   });
 }
@@ -186,26 +215,35 @@ function normalizeYoutubeChannelItems(feed, source) {
       authors: item.author ? [item.author] : [],
       tags: [],
       thumbnail: item.enclosure?.url ?? null,
-      raw: item
+      raw: item,
     };
   });
 }
 
 function normalizeRssItems(feed, source) {
   if (!feed || !Array.isArray(feed.items)) return [];
-  return feed.items.map((item) => ({
-    id: `rss-${sanitize(item.guid ?? item.id ?? item.link ?? item.title)}`,
-    sourceType: "rss",
-    sourceId: source.id ?? source.url ?? "rss",
-    title: item.title ?? "Untitled article",
-    url: item.link ?? null,
-    description: item.contentSnippet ?? item.content ?? "",
-    publishedAt: item.isoDate ?? item.pubDate ?? null,
-    authors: item.creator ? [item.creator] : item.author ? [item.author] : [],
-    tags: Array.isArray(item.categories) ? item.categories : [],
-    thumbnail: item.enclosure?.url ?? null,
-    raw: item
-  }));
+  return feed.items.map((item) => {
+    const safeId = sanitize(
+      item.guid ?? item.id ?? item.link ?? item.title ?? "rss-item"
+    );
+    return {
+      id: `rss-${safeId}`,
+      sourceType: "rss",
+      sourceId: source.id ?? source.url ?? "rss",
+      title: item.title ?? "Untitled article",
+      url: item.link ?? null,
+      description: item.contentSnippet ?? item.content ?? "",
+      publishedAt: item.isoDate ?? item.pubDate ?? null,
+      authors: item.creator
+        ? [item.creator]
+        : item.author
+        ? [item.author]
+        : [],
+      tags: Array.isArray(item.categories) ? item.categories : [],
+      thumbnail: item.enclosure?.url ?? null,
+      raw: item,
+    };
+  });
 }
 
 async function generateSummary(item) {
@@ -217,24 +255,27 @@ async function generateSummary(item) {
   }
 
   try {
-    const { content, model } = await callOpenRouter([
-      {
-        role: "system",
-        content:
-          "You summarise research signals for an internal knowledgebase. Provide a concise, actionable summary (max 3 sentences) highlighting why the item matters."
-      },
-      {
-        role: "user",
-        content: baseText
-      }
-    ], {
-      maxTokens: 180,
-      temperature: 0.2
-    });
+    const { content, model } = await callOpenRouter(
+      [
+        {
+          role: "system",
+          content:
+            "You summarise research signals for an internal knowledgebase. Provide a concise, actionable summary (max 3 sentences).",
+        },
+        {
+          role: "user",
+          content: baseText,
+        },
+      ],
+      { maxTokens: 180, temperature: 0.2 }
+    );
     log("Generated summary", { model });
     return content.trim();
   } catch (error) {
-    log("OpenRouter summarisation failed", { error: error.message, title: item.title });
+    log("OpenRouter summarisation failed", {
+      error: error.message,
+      title: item.title,
+    });
     return truncate(baseText, 280);
   }
 }
@@ -276,7 +317,10 @@ async function loadJson(filePath, fallback = null) {
     return JSON.parse(raw);
   } catch (error) {
     if (fallback === null) {
-      log("Failed to parse JSON", { filePath, error: error.message });
+      log("Failed to parse JSON", {
+        filePath,
+        error: error.message,
+      });
     }
     return fallback;
   }
@@ -294,7 +338,7 @@ async function fileExists(filePath) {
 async function listDirectories(parent) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     return [];
   }
@@ -306,4 +350,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
