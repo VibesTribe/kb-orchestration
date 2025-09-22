@@ -32,7 +32,7 @@ jobs:
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
         run: npm run pipeline
 
-            - name: Upload logs
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
