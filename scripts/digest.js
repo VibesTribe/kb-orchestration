@@ -2,6 +2,7 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { saveJsonCheckpoint, saveTextCheckpoint, ensureDir, loadJson, listDirectories } from "./utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -33,17 +34,48 @@ export async function digest() {
   const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
   await ensureDir(digestDir);
 
-  const digestPayload = buildDigestPayload(curatedRun.content, projectMap);
-  if (!digestPayload.projects.length) {
-    log("No High or Moderate items; skipping email but saving digest payload", { digestDir });
-  }
-
   const jsonPath = path.join(digestDir, "digest.json");
-  await fs.writeFile(jsonPath, JSON.stringify(digestPayload, null, 2), "utf8");
-
-  const textContent = renderTextDigest(digestPayload);
   const textPath = path.join(digestDir, "digest.txt");
-  await fs.writeFile(textPath, textContent, "utf8");
+
+  // Load previous checkpoint if it exists
+  const digestPayload = (await loadJson(jsonPath, null)) || {
+    generatedAt: new Date().toISOString(),
+    subject: "",
+    totalHigh: 0,
+    totalModerate: 0,
+    projects: []
+  };
+
+  // Process projects incrementally
+  for (const [projectKey, project] of projectMap.entries()) {
+    // Skip if already processed this project in checkpoint
+    if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
+
+    const { high, moderate } = collectItemsForProject(curatedRun.content, project);
+
+    if (!high.length && !moderate.length) continue;
+
+    const projectDigest = {
+      key: projectKey,
+      name: project.name,
+      summary: project.summary,
+      high,
+      moderate,
+      changelog: project.changelog ?? []
+    };
+
+    digestPayload.projects.push(projectDigest);
+    digestPayload.totalHigh += high.length;
+    digestPayload.totalModerate += moderate.length;
+
+    digestPayload.subject = `Knowledgebase Digest â€“ ${digestPayload.totalHigh} High / ${digestPayload.totalModerate} Moderate items`;
+
+    // Save checkpoint after each project
+    await saveJsonCheckpoint(jsonPath, digestPayload);
+    await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+
+    log("Checkpoint saved", { project: project.name });
+  }
 
   log("Digest artifacts prepared", {
     json: path.relative(ROOT_DIR, jsonPath),
@@ -68,53 +100,28 @@ export async function digest() {
 
   await sendBrevoEmail({
     subject: digestPayload.subject,
-    textContent,
+    textContent: renderTextDigest(digestPayload),
     recipients
   });
 }
 
-function buildDigestPayload(curated, projectMap) {
-  const projects = [];
+function collectItemsForProject(curated, project) {
+  const high = [];
+  const moderate = [];
 
-  for (const [projectKey, project] of projectMap.entries()) {
-    const high = [];
-    const moderate = [];
+  for (const item of curated.items ?? []) {
+    const assignment = (item.projects ?? []).find(
+      (entry) => entry.projectKey === project.key || entry.project === project.name
+    );
+    if (!assignment) continue;
 
-    for (const item of curated.items ?? []) {
-      const assignment = (item.projects ?? []).find((entry) => entry.projectKey === projectKey || entry.project === project.name);
-      if (!assignment) continue;
-
-      if (assignment.usefulness === "HIGH") {
-        high.push(buildDigestEntry(item, assignment));
-      } else if (assignment.usefulness === "MODERATE") {
-        moderate.push(buildDigestEntry(item, assignment));
-      }
+    if (assignment.usefulness === "HIGH") {
+      high.push(buildDigestEntry(item, assignment));
+    } else if (assignment.usefulness === "MODERATE") {
+      moderate.push(buildDigestEntry(item, assignment));
     }
-
-    if (!high.length && !moderate.length) continue;
-
-    projects.push({
-      key: projectKey,
-      name: project.name,
-      summary: project.summary,
-      high,
-      moderate,
-      changelog: project.changelog ?? []
-    });
   }
-
-  const totalHigh = projects.reduce((sum, project) => sum + project.high.length, 0);
-  const totalModerate = projects.reduce((sum, project) => sum + project.moderate.length, 0);
-
-  const subject = `Knowledgebase Digest – ${totalHigh} High / ${totalModerate} Moderate items`;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    subject,
-    totalHigh,
-    totalModerate,
-    projects
-  };
+  return { high, moderate };
 }
 
 function buildDigestEntry(item, assignment) {
@@ -141,57 +148,38 @@ function renderTextDigest(payload) {
 
   for (const project of payload.projects) {
     lines.push(`# ${project.name}`);
-    if (project.summary) {
-      lines.push(`Summary: ${project.summary}`);
-    }
+    if (project.summary) lines.push(`Summary: ${project.summary}`);
     lines.push("");
 
     if (project.high.length) {
       lines.push("## High Priority");
-      for (const entry of project.high) {
-        lines.push(formatEntry(entry));
-      }
+      for (const entry of project.high) lines.push(formatEntry(entry));
       lines.push("");
     }
 
     if (project.moderate.length) {
       lines.push("## Moderate Priority");
-      for (const entry of project.moderate) {
-        lines.push(formatEntry(entry));
-      }
+      for (const entry of project.moderate) lines.push(formatEntry(entry));
       lines.push("");
     }
 
     if (project.changelog.length) {
       lines.push("## Recent Changelog Notes");
-      for (const note of project.changelog.slice(0, 5)) {
-        lines.push(`- ${note}`);
-      }
+      for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
       lines.push("");
     }
   }
-
   return lines.join("\n");
 }
 
 function formatEntry(entry) {
   const lines = [];
   lines.push(`- **${entry.title}** (${entry.usefulness})`);
-  if (entry.url) {
-    lines.push(`  URL: ${entry.url}`);
-  }
-  if (entry.summary) {
-    lines.push(`  Summary: ${entry.summary}`);
-  }
-  if (entry.reason) {
-    lines.push(`  Why it matters: ${entry.reason}`);
-  }
-  if (entry.nextSteps) {
-    lines.push(`  Next steps: ${entry.nextSteps}`);
-  }
-  if (entry.publishedAt) {
-    lines.push(`  Published: ${entry.publishedAt}`);
-  }
+  if (entry.url) lines.push(`  URL: ${entry.url}`);
+  if (entry.summary) lines.push(`  Summary: ${entry.summary}`);
+  if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
+  if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
+  if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
   lines.push("  Source: " + entry.sourceType);
   return lines.join("\n");
 }
@@ -205,21 +193,13 @@ async function sendBrevoEmail({ subject, textContent, recipients }) {
         "api-key": BREVO_API_KEY
       },
       body: JSON.stringify({
-        sender: {
-          name: BREVO_FROM_NAME,
-          email: BREVO_FROM_EMAIL
-        },
+        sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
         to: recipients.map((email) => ({ email })),
         subject,
         textContent
       })
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Brevo error: ${response.status} ${text}`);
-    }
-
+    if (!response.ok) throw new Error(`Brevo error: ${response.status} ${await response.text()}`);
     log("Digest email sent", { recipients: recipients.length });
   } catch (error) {
     log("Failed to send Brevo email", { error: error.message });
@@ -238,9 +218,7 @@ async function getLatestRun(root) {
     for (const stampDir of stampDirs) {
       const itemsPath = path.join(dayPath, stampDir, "items.json");
       const content = await loadJson(itemsPath, null);
-      if (content) {
-        return { dayDir, stampDir, itemsPath, content };
-      }
+      if (content) return { dayDir, stampDir, itemsPath, content };
     }
   }
   return null;
@@ -276,28 +254,6 @@ async function loadChangelog(pathname) {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
-  } catch {
-    return [];
-  }
-}
-
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
-}
-
-async function loadJson(filePath, fallback) {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch {
     return [];
   }
