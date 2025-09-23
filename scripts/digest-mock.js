@@ -8,7 +8,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 
-// Build a fake curated run with two projects and some items
 async function createMockCuratedRun() {
   const now = new Date().toISOString();
   const dayDir = now.slice(0, 10);
@@ -20,7 +19,6 @@ async function createMockCuratedRun() {
       title: "New Agent Framework (FlowKit)",
       url: "https://original-resource.com/flowkit-release",
       summary: "FlowKit framework improves subagent orchestration for complex workflows.",
-      description: "",
       publishedAt: now,
       sourceType: "youtube",
       projects: [
@@ -38,7 +36,6 @@ async function createMockCuratedRun() {
       title: "Blog on token optimization",
       url: "https://original-resource.com/token-blog",
       summary: "Tips on reducing token usage to avoid exceeding free tier quotas.",
-      description: "",
       publishedAt: now,
       sourceType: "rss",
       projects: [
@@ -56,7 +53,6 @@ async function createMockCuratedRun() {
       title: "New Family Tree Visualization Tool",
       url: "https://original-resource.com/tree-visualization",
       summary: "Interactive visualization for genealogical data with collapsible branches.",
-      description: "",
       publishedAt: now,
       sourceType: "github",
       projects: [
