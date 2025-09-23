@@ -210,31 +210,10 @@ async function getLatestRun(root) {
   return null;
 }
 
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
-}
-
-async function loadJson(filePath, fallback) {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
 if (import.meta.url === `file://${process.argv[1]}`) {
   publish().catch((error) => {
     console.error("Publish step failed", error);
     process.exitCode = 1;
   });
 }
+
