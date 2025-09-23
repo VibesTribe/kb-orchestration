@@ -39,15 +39,12 @@ export async function digest() {
   const projects = await loadProjects();
   const projectMap = new Map(projects.map((project) => [project.key, project]));
 
-  const digestDir = path.join(
-    DIGEST_ROOT,
-    curatedRun.dayDir,
-    curatedRun.stampDir
-  );
+  const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
   await ensureDir(digestDir);
 
   const jsonPath = path.join(digestDir, "digest.json");
   const textPath = path.join(digestDir, "digest.txt");
+  const htmlPath = path.join(digestDir, "digest.html");
 
   // Load previous checkpoint if it exists
   const digestPayload = (await loadJson(jsonPath, null)) || {
@@ -62,11 +59,7 @@ export async function digest() {
   for (const [projectKey, project] of projectMap.entries()) {
     if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
-    const { high, moderate } = collectItemsForProject(
-      curatedRun.content,
-      project
-    );
-
+    const { high, moderate } = collectItemsForProject(curatedRun.content, project);
     if (!high.length && !moderate.length) continue;
 
     const projectDigest = {
@@ -84,16 +77,17 @@ export async function digest() {
 
     digestPayload.subject = `Daily Digest – ${digestPayload.totalHigh} Highly Useful + ${digestPayload.totalModerate} Moderately Useful`;
 
-    // Save checkpoint after each project
     await saveJsonCheckpoint(jsonPath, digestPayload);
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+    await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
 
     log("Checkpoint saved", { project: project.name });
   }
 
   log("Digest artifacts prepared", {
     json: path.relative(ROOT_DIR, jsonPath),
-    text: path.relative(ROOT_DIR, textPath)
+    text: path.relative(ROOT_DIR, textPath),
+    html: path.relative(ROOT_DIR, htmlPath)
   });
 
   if (!BREVO_API_KEY) {
@@ -114,8 +108,8 @@ export async function digest() {
 
   await sendBrevoEmail({
     subject: digestPayload.subject,
-    htmlContent: renderHtmlDigest(digestPayload),
     textContent: renderTextDigest(digestPayload),
+    htmlContent: renderHtmlDigest(digestPayload),
     recipients
   });
 }
@@ -141,6 +135,14 @@ function collectItemsForProject(curated, project) {
 }
 
 function buildDigestEntry(item, assignment) {
+  const published = item.publishedAt
+    ? new Date(item.publishedAt).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      })
+    : null;
+
   return {
     title: item.title ?? "(untitled)",
     url: item.url ?? null,
@@ -148,124 +150,24 @@ function buildDigestEntry(item, assignment) {
     usefulness: assignment.usefulness,
     reason: assignment.reason ?? "",
     nextSteps: assignment.nextSteps ?? "",
-    publishedAt: item.publishedAt ?? null,
+    publishedAt: published,
     sourceType: item.sourceType ?? "unknown"
   };
 }
 
-// 🟢 HTML rendering
-function renderHtmlDigest(payload) {
-  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric"
-  });
-
-  const header = `
-    <h1 style="font-size:20px; font-weight:400; font-family: 'Open Sans', Verdana, sans-serif; margin:0 0 4px;">Daily Digest</h1>
-    <p style="font-size:14px; color:#6b7280; margin:0 0 16px; font-family:'Inter','Helvetica Neue',Arial,sans-serif;">
-      ${dateStr}<br>
-      News You Can Use Today:<br>
-      ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful
-    </p>
-  `;
-
-  const projectSections = payload.projects
-    .map((project) => {
-      const high = project.high
-        .map((entry) => renderHtmlEntry(entry, "HIGHLY USEFUL"))
-        .join("");
-      const moderate = project.moderate
-        .map((entry) => renderHtmlEntry(entry, "MODERATELY USEFUL"))
-        .join("");
-
-      const changelog =
-        project.changelog.length > 0
-          ? `<div style="margin-top:12px;">
-               <h4 style="font-size:15px; font-weight:500; margin:8px 0;">Recent Changelog Notes</h4>
-               <ul style="margin:4px 0 0 16px; padding:0; color:#374151; font-size:14px; line-height:1.5;">
-                 ${project.changelog
-                   .map((note) => `<li>${note}</li>`)
-                   .join("\n")}
-               </ul>
-             </div>`
-          : "";
-
-      return `
-        <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 8px;">${project.name}</h2>
-        <p style="margin:0 0 12px; color:#374151; font-size:14px; line-height:1.5;">${project.summary}</p>
-        ${high}${moderate}${changelog}
-      `;
-    })
-    .join('<hr style="border:none; border-top:1px solid #e5e7eb; margin:20px 0;">');
-
-  return `
-  <div style="font-family:'Inter','Helvetica Neue',Arial,sans-serif; background:#f9fafb; padding:20px;">
-    <div style="max-width:600px; margin:0 auto; background:#fff; border-radius:12px; padding:24px;">
-      ${header}
-      ${projectSections}
-      <hr style="border:none; border-top:1px solid #e5e7eb; margin:20px 0;">
-      <p style="font-size:14px; color:#374151; text-align:center;">
-        You can still browse all recent updates, even those not flagged as useful:<br>
-        <a href="https://vibestribe.github.io/kb-site/" style="color:#2563eb;">View this digest on KB-site</a>
-      </p>
-    </div>
-  </div>
-  `;
-}
-
-function renderHtmlEntry(entry, label) {
-  const color =
-    label === "HIGHLY USEFUL" ? "#065f46" : "#5b21b6";
-  return `
-    <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:12px;">
-      <h3 style="font-size:16px; font-weight:500; color:${color}; margin:0 0 6px;">${label}</h3>
-      <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
-      <p style="margin:4px 0; font-size:14px; color:#374151; line-height:1.5;">${entry.summary}</p>
-      ${
-        entry.reason
-          ? `<p style="margin:4px 0; font-size:14px; color:${color}; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>`
-          : ""
-      }
-      ${
-        entry.nextSteps
-          ? `<p style="margin:4px 0; font-size:14px; color:${color}; line-height:1.5;"><em>Next steps:</em> ${entry.nextSteps}</p>`
-          : ""
-      }
-      ${
-        entry.publishedAt
-          ? `<p style="margin:4px 0; font-size:14px; color:#374151;">Published: ${new Date(
-              entry.publishedAt
-            ).toLocaleDateString("en-US", {
-              year: "numeric",
-              month: "long",
-              day: "numeric"
-            })}</p>`
-          : ""
-      }
-      ${
-        entry.url
-          ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>`
-          : ""
-      }
-    </div>
-  `;
-}
-
-// 🟢 Plain-text fallback
+// --- TEXT DIGEST ---
 function renderTextDigest(payload) {
+  const lines = [];
   const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
     day: "numeric"
   });
 
-  const lines = [];
   lines.push("Daily Digest");
   lines.push(dateStr);
-  lines.push("News You Can Use Today:");
   lines.push(
-    `${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
+    `News You Can Use Today:\n${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
   );
   lines.push("");
 
@@ -288,15 +190,13 @@ function renderTextDigest(payload) {
 
     if (project.changelog.length) {
       lines.push("Recent Changelog Notes");
-      for (const note of project.changelog) lines.push(`- ${note}`);
+      for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
       lines.push("");
     }
   }
 
-  lines.push(
-    "You can still browse all recent updates, even those not flagged as useful:"
-  );
-  lines.push("View this digest on KB-site → https://vibestribe.github.io/kb-site/");
+  lines.push("You can still browse all recent updates, even those not flagged as useful:");
+  lines.push("View this digest on KB-site: https://vibestribe.github.io/kb-site/");
 
   return lines.join("\n");
 }
@@ -304,23 +204,144 @@ function renderTextDigest(payload) {
 function formatTextEntry(entry) {
   const lines = [];
   lines.push(`- ${entry.title}`);
-  if (entry.url) lines.push(`  URL: ${entry.url}`);
-  if (entry.summary) lines.push(`  Summary: ${entry.summary}`);
+  if (entry.summary) lines.push(`  ${entry.summary}`);
   if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
   if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
-  if (entry.publishedAt)
-    lines.push(
-      `  Published: ${new Date(entry.publishedAt).toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      })}`
-    );
-  lines.push(`  Source: ${entry.sourceType}`);
+  if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
+  if (entry.url) lines.push(`  Go to source: ${entry.url}`);
   return lines.join("\n");
 }
 
-async function sendBrevoEmail({ subject, htmlContent, textContent, recipients }) {
+// --- HTML DIGEST ---
+function renderHtmlDigest(payload) {
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Daily Digest</title>
+  </head>
+  <body style="font-family: 'Open Sans', Verdana, sans-serif; background-color: #f9fafb; margin: 0; padding: 0;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; padding: 20px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 12px; padding: 24px; text-align: left;">
+            <tr>
+              <td>
+                <h1 style="color: #111827; font-size: 20px; font-weight:400; margin: 0 0 12px;">Daily Digest</h1>
+                <p style="color: #6b7280; font-size: 14px; margin: 0 0 16px;">${dateStr}</p>
+                <p style="color: #111827; font-size: 14px; margin: 0 0 24px;">News You Can Use Today:<br>${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful</p>
+
+                ${payload.projects
+                  .map(
+                    (project) => `
+                      <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 12px; color:#111827;">${project.name}</h2>
+                      ${
+                        project.summary
+                          ? `<p style="font-size:14px; color:#374151; margin:0 0 16px;">${project.summary}</p>`
+                          : ""
+                      }
+
+                      ${project.high
+                        .map(
+                          (entry) => `
+                          <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:16px;">
+                            <h3 style="font-size:16px; font-weight:500; color:#065f46; margin:0 0 8px;">Highly Useful</h3>
+                            <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
+                            <p style="font-size:14px; color:#374151; margin:4px 0;">${entry.summary}</p>
+                            ${
+                              entry.reason
+                                ? `<p style="font-size:14px; color:#065f46; margin:4px 0;"><em>Why it matters:</em> ${entry.reason}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.nextSteps
+                                ? `<p style="font-size:14px; color:#065f46; margin:4px 0;"><em>Next steps:</em> ${entry.nextSteps}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.publishedAt
+                                ? `<p style="font-size:14px; color:#374151; margin:4px 0;">Published: ${entry.publishedAt}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.url
+                                ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>`
+                                : ""
+                            }
+                          </div>`
+                        )
+                        .join("")}
+
+                      ${project.moderate
+                        .map(
+                          (entry) => `
+                          <div style="background:#fbfaff; border-radius:8px; padding:12px; margin-bottom:16px;">
+                            <h3 style="font-size:16px; font-weight:500; color:#5b21b6; margin:0 0 8px;">Moderately Useful</h3>
+                            <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
+                            <p style="font-size:14px; color:#374151; margin:4px 0;">${entry.summary}</p>
+                            ${
+                              entry.reason
+                                ? `<p style="font-size:14px; color:#5b21b6; margin:4px 0;"><em>Why it matters:</em> ${entry.reason}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.nextSteps
+                                ? `<p style="font-size:14px; color:#5b21b6; margin:4px 0;"><em>Next steps:</em> ${entry.nextSteps}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.publishedAt
+                                ? `<p style="font-size:14px; color:#374151; margin:4px 0;">Published: ${entry.publishedAt}</p>`
+                                : ""
+                            }
+                            ${
+                              entry.url
+                                ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>`
+                                : ""
+                            }
+                          </div>`
+                        )
+                        .join("")}
+
+                      ${
+                        project.changelog.length
+                          ? `<div style="margin:0 0 20px;">
+                              <h3 style="font-size:16px; font-weight:500; color:#374151; margin:0 0 8px;">Recent Changelog Notes</h3>
+                              <ul style="padding-left:16px; margin:0; font-size:14px; color:#374151;">
+                                ${project.changelog
+                                  .slice(0, 5)
+                                  .map((note) => `<li>${note}</li>`)
+                                  .join("")}
+                              </ul>
+                            </div>`
+                          : ""
+                      }
+                      <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+                    `
+                  )
+                  .join("")}
+
+                <p style="text-align: center; margin: 0; font-size: 14px; color: #374151;">
+                  You can still browse all recent updates, even those not flagged as useful:<br>
+                  <a href="https://vibestribe.github.io/kb-site/" style="color: #2563eb;">View this digest on KB-site</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
   try {
     const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
@@ -332,8 +353,8 @@ async function sendBrevoEmail({ subject, htmlContent, textContent, recipients })
         sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
         to: recipients.map((email) => ({ email })),
         subject,
-        htmlContent,
-        textContent
+        textContent,
+        htmlContent
       })
     });
     if (!response.ok)
