@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 🔄 Refresh Raindrop token first
+      # 🔄 Refresh Raindrop token first (correct filename)
       - name: Refresh Raindrop token
         env:
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
@@ -37,7 +37,7 @@ jobs:
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
           RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
           ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
-        run: node scripts/raindrop-refresh.js
+        run: node scripts/refresh-raindrop.js
 
       - name: Execute pipeline (attempt ${{ matrix.attempt }})
         env:
@@ -76,13 +76,13 @@ jobs:
           path: data/cache/pipeline-state.json
           if-no-files-found: ignore
 
-      # Optional: snapshot knowledge outputs
+      # ✅ Snapshot knowledge outputs from publish step
       - name: Upload knowledge snapshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: knowledge-snapshot
           path: |
-            ../knowledgebase/knowledge.json
-            ../knowledgebase/knowledge.graph.json
+            data/publish/**/knowledge.json
+            data/publish/**/knowledge.graph.json
           if-no-files-found: ignore
