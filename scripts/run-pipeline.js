@@ -1,6 +1,8 @@
+// scripts/run-pipeline.js
 import { ingest } from "./ingest.js";
 import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
+import { digest } from "./digest.js";   // <— add
 import { publish } from "./publish.js";
 
 function logStep(message) {
@@ -13,7 +15,8 @@ export async function runPipeline() {
     { name: "Ingest", fn: ingest },
     { name: "Enrich", fn: enrich },
     { name: "Classify", fn: classify },
-    { name: "Publish", fn: publish }
+    { name: "Digest", fn: digest },     // <— run BEFORE publish
+    { name: "Publish", fn: publish },
   ];
 
   for (const step of steps) {
@@ -29,5 +32,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
-
