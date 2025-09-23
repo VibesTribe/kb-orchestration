@@ -2,13 +2,7 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  saveJsonCheckpoint,
-  saveTextCheckpoint,
-  ensureDir,
-  loadJson,
-  listDirectories
-} from "./lib/utils.js";
+import { saveJsonCheckpoint, saveTextCheckpoint, ensureDir, loadJson, listDirectories } from "../lib/utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
