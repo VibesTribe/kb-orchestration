@@ -1,104 +1,87 @@
-import { renderHtmlDigest } from "./digest.js";
-import "dotenv/config";
+import { digest } from "./digest.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ensureDir } from "./lib/utils.js";
 
-const BREVO_API_KEY = process.env.BREVO_API_KEY;
-const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
-const BREVO_FROM_NAME = process.env.BREVO_FROM_NAME ?? "Knowledgebase";
-const BREVO_TO = process.env.BREVO_TO ?? "";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 
-async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
-  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "api-key": BREVO_API_KEY },
-    body: JSON.stringify({
-      sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
-      to: recipients.map((email) => ({ email })),
-      subject,
-      textContent,
-      htmlContent
-    })
-  });
-  if (!response.ok) throw new Error(`Brevo error: ${response.status} ${await response.text()}`);
-  console.log("✅ Mock digest email sent to", recipients.join(", "));
-}
+async function createMockCuratedRun() {
+  const now = new Date();
+  const dayDir = now.toISOString().slice(0, 10);
+  const stampDir = now.toISOString().replace(/[:.]/g, "-");
 
-// --- mock data payload ---
-const payload = {
-  generatedAt: new Date().toISOString(),
-  subject: "Knowledgebase Digest – 2 High / 2 Moderate items",
-  totalHigh: 2,
-  totalModerate: 2,
-  projects: [
+  const mockDir = path.join(CURATED_ROOT, dayDir, stampDir);
+  await ensureDir(mockDir);
+
+  const items = [
     {
-      key: "vibeflow",
-      name: "Vibeflow",
-      summary: "AI coding orchestrator project",
-      high: [
+      id: "item-1",
+      title: "New Agent Framework (FlowKit)",
+      url: "https://original-resource.com/flowkit-release",
+      summary: "FlowKit framework improves subagent orchestration for complex workflows.",
+      description: "Longer description here if needed",
+      publishedAt: now.toISOString(),
+      sourceType: "youtube",
+      projects: [
         {
-          title: "New Agent Framework (FlowKit)",
-          url: "https://example.com/flowkit",
-          summary: "FlowKit improves subagent orchestration for complex workflows.",
-          reason: "Improves Vibeflow orchestration efficiency.",
+          project: "Vibeflow",
+          projectKey: "vibeflow",
           usefulness: "HIGH",
-          publishedAt: "2025-09-20",
-          sourceType: "YouTube"
+          reason: "Improves Vibeflow build-phase orchestration efficiency without adding overhead.",
+          nextSteps: "Evaluate integration with existing orchestrator."
         }
-      ],
-      moderate: [
-        {
-          title: "Token Optimization Tips",
-          url: "https://example.com/token-tips",
-          summary: "Blog with tips on reducing token usage to avoid exceeding free quotas.",
-          reason: "Helps reduce runtime costs for Vibeflow.",
-          usefulness: "MODERATE",
-          publishedAt: "2025-09-21",
-          sourceType: "Blog"
-        }
-      ],
-      changelog: []
+      ]
     },
     {
-      key: "webs-of-wisdom",
-      name: "Webs of Wisdom",
-      summary: "Interactive storytelling and genealogy platform",
-      high: [
+      id: "item-2",
+      title: "Blog on token optimization",
+      url: "https://original-resource.com/token-blog",
+      summary: "Tips on reducing token usage to avoid exceeding free tier quotas.",
+      description: "Detailed blog post about token savings.",
+      publishedAt: now.toISOString(),
+      sourceType: "rss",
+      projects: [
         {
-          title: "Family Tree Visualization Tool",
-          url: "https://example.com/tree-visualization",
-          summary: "Interactive visualization for genealogical data with collapsible branches.",
-          reason: "Could be integrated into Webs of Wisdom for better user navigation.",
-          usefulness: "HIGH",
-          publishedAt: "2025-09-19",
-          sourceType: "GitHub"
-        }
-      ],
-      moderate: [
-        {
-          title: "AI Narrative Techniques",
-          url: "https://example.com/storytelling",
-          summary: "Overview of AI-driven storytelling techniques.",
-          reason: "Offers inspiration for enhancing storytelling modules.",
+          project: "Vibeflow",
+          projectKey: "vibeflow",
           usefulness: "MODERATE",
-          publishedAt: "2025-09-18",
-          sourceType: "Blog"
+          reason: "Helps lower Vibeflow runtime costs when scaling tasks with multiple agents.",
+          nextSteps: "Adopt best practices for prompt design."
         }
-      ],
-      changelog: []
-    }
-  ]
-};
-
-const htmlContent = renderHtmlDigest(payload);
-const textContent = "Mock digest preview – check HTML version for full design.";
-
-const recipients = BREVO_TO.split(/[,;\s]+/).filter(Boolean);
-
-sendBrevoEmail({
-  subject: payload.subject,
-  textContent,
-  htmlContent,
-  recipients
-}).catch((err) => {
-  console.error("❌ Failed to send mock digest", err);
-  process.exitCode = 1;
-});
+      ]
+    },
+    {
+      id: "item-3",
+      title: "New Family Tree Visualization Tool",
+      url: "https://original-resource.com/tree-visualization",
+      summary: "Interactive visualization for genealogical data with collapsible branches.",
+      description: "Full write-up of the visualization tool.",
+      publishedAt: now.toISOString(),
+      sourceType: "github",
+      projects: [
+        {
+          project: "Webs of Wisdom",
+          projectKey: "webs-of-wisdom",
+          usefulness: "HIGH",
+          reason: "Could be integrated into Webs of Wisdom for better user navigation.",
+          nextSteps: "Prototype embedding tool into site."
+        }
+      ]
+    },
+    {
+      id: "item-4",
+      title: "Article on interactive storytelling",
+      url: "https://original-resource.com/storytelling-article",
+      summary: "Overview of new techniques in AI-driven narrative building.",
+      description: "Some insights on storytelling.",
+      publishedAt: now.toISOString(),
+      sourceType: "rss",
+      projects: [
+        {
+          project: "Webs of Wisdom",
+          projectKey: "webs-of-wisdom",
+          usefulness: "MODERATE",
+          reason: "Offers inspiration for enhancing storytelling modules.",
