@@ -12,13 +12,6 @@ jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
-    # Retry once automatically — second run resumes from last step
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        attempt: [1, 2]
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -32,17 +25,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 🔄 Refresh Raindrop token first (uses PAT mapped to GITHUB_TOKEN)
+      # 🔄 Refresh Raindrop token first
       - name: Refresh Raindrop token
         env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}           # PAT with repo+actions perms
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN             # writes refreshed token to this repo secret
+          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
         run: node scripts/refresh-raindrop.js
 
-      - name: Execute pipeline (attempt ${{ matrix.attempt }})
+      - name: Execute pipeline (attempt 1)
         env:
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -54,8 +47,9 @@ jobs:
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
           KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
         run: npm run pipeline
+        continue-on-error: true
 
-      # ✅ Useful artifacts for debugging/recovery (do not affect live site)
+      # ✅ Upload artifacts (first run)
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,6 +67,71 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload pipeline state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-state
+          path: data/cache/pipeline-state.json
+          if-no-files-found: ignore
+
+  retry-if-failed:
+    needs: run-pipeline
+    if: failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh Raindrop token
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}
+          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
+          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
+          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
+          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
+        run: node scripts/refresh-raindrop.js
+
+      - name: Execute pipeline (retry)
+        env:
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
+          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+          KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
+        run: npm run pipeline
+
+      # ✅ Upload artifacts again (latest state wins)
+      - name: Upload logs (retry)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs
+          path: logs/
+          if-no-files-found: ignore
+
+      - name: Upload summaries cache (retry)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summaries-cache
+          path: data/cache/summaries.json
+          if-no-files-found: ignore
+
+      - name: Upload pipeline state (retry)
         if: always()
         uses: actions/upload-artifact@v4
         with:
