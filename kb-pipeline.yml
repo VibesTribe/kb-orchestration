@@ -1,0 +1,88 @@
+name: Orchestrate Knowledgebase
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 11:00 PM (previous day) Waterloo time ≈ 03:00 UTC
+    - cron: "0 3 * * *"
+    # 09:00 AM Waterloo time ≈ 13:00 UTC
+    - cron: "0 13 * * *"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    # Retry once automatically — second run resumes from last step
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        attempt: [1, 2]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 🔄 Refresh Raindrop token first
+      - name: Refresh Raindrop token
+        env:
+          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
+          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
+          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
+          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
+          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+        run: node scripts/raindrop-refresh.js
+
+      - name: Execute pipeline (attempt ${{ matrix.attempt }})
+        env:
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
+          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+          KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
+        run: npm run pipeline
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs
+          path: logs/
+          if-no-files-found: ignore
+
+      - name: Upload summaries cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summaries-cache
+          path: data/cache/summaries.json
+          if-no-files-found: ignore
+
+      - name: Upload pipeline state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-state
+          path: data/cache/pipeline-state.json
+          if-no-files-found: ignore
+
+      # Optional: snapshot knowledge outputs
+      - name: Upload knowledge snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-snapshot
+          path: |
+            ../knowledgebase/knowledge.json
+            ../knowledgebase/knowledge.graph.json
+          if-no-files-found: ignore
