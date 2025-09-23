@@ -21,11 +21,16 @@ logs/
 # Data folders (ignore by default)
 data/
 
-# --- Allow the summaries cache to be tracked ---
+# --- Allow essential state files ---
 !data/cache/
+!data/cache/pipeline-state.json
+!data/cache/system-status.json
 !data/cache/summaries.json
 
-# Still ignore other big raw/enriched folders
+# Ignore heavy generated data
 data/raw/
 data/enriched/
+data/ingest/
+data/curated/
+
 
