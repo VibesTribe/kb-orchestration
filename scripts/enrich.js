@@ -3,30 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
-const ENRICH_ROOT = path.join(ROOT_DIR, "data", "enrich");
-
-/**
- * Ensure a directory exists (recursively).
- */
+/* ------------------ Local utilities ------------------ */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
-
-/**
- * Save JSON to a file (checkpoint style).
- */
 async function saveJsonCheckpoint(filePath, data) {
   await ensureDir(path.dirname(filePath));
   const json = JSON.stringify(data, null, 2);
   await fs.writeFile(filePath, json, "utf8");
 }
-
-/**
- * Load JSON from a file if it exists, otherwise return fallback.
- */
 async function loadJson(filePath, fallback) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -35,10 +20,6 @@ async function loadJson(filePath, fallback) {
     return fallback;
   }
 }
-
-/**
- * List immediate subdirectories of a parent directory.
- */
 async function listDirectories(parent) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
@@ -48,9 +29,38 @@ async function listDirectories(parent) {
   }
 }
 
-/**
- * Get the most recent run (day + timestamp) from a data root.
- */
+/* ------------------ Paths ------------------ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..");
+const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
+const ENRICH_ROOT = path.join(ROOT_DIR, "data", "enrich");
+
+/* ------------------ Enrich step ------------------ */
+export async function enrich() {
+  const ingestRun = await getLatestRun(INGEST_ROOT);
+  if (!ingestRun) {
+    console.log("No ingested data found; skip enrich");
+    return;
+  }
+
+  const enrichDir = path.join(ENRICH_ROOT, ingestRun.dayDir, ingestRun.stampDir);
+  await ensureDir(enrichDir);
+
+  // Simple demo enrichment: add a `summary`
+  const enriched = ingestRun.content.items.map((item) => ({
+    ...item,
+    summary: `Enriched summary for ${item.title}`,
+  }));
+
+  await saveJsonCheckpoint(path.join(enrichDir, "items.json"), {
+    items: enriched,
+    generatedAt: new Date().toISOString(),
+  });
+
+  console.log("Enrich complete:", { itemCount: enriched.length, dir: enrichDir });
+}
+
+/* ------------------ Helper ------------------ */
 async function getLatestRun(root) {
   const dayDirs = await listDirectories(root);
   if (!dayDirs.length) return null;
@@ -67,34 +77,7 @@ async function getLatestRun(root) {
   return null;
 }
 
-/**
- * Enrich step — adds summaries/descriptions.
- */
-export async function enrich() {
-  const ingestRun = await getLatestRun(INGEST_ROOT);
-  if (!ingestRun) {
-    console.log("No ingest data found; skip enrich");
-    return;
-  }
-
-  const enrichDir = path.join(ENRICH_ROOT, ingestRun.dayDir, ingestRun.stampDir);
-  await ensureDir(enrichDir);
-
-  const enriched = ingestRun.content.items.map((item) => ({
-    ...item,
-    summary: `Enriched summary for ${item.title}`,
-    description: `More detailed description for ${item.title}`,
-  }));
-
-  await saveJsonCheckpoint(path.join(enrichDir, "items.json"), {
-    items: enriched,
-    generatedAt: new Date().toISOString(),
-  });
-
-  console.log("Enrich complete:", { itemCount: enriched.length, dir: enrichDir });
-}
-
-// Run if invoked directly
+/* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
   enrich().catch((err) => {
     console.error("Enrich failed", err);
