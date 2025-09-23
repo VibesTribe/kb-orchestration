@@ -2,9 +2,12 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureDir, loadJson, saveJson } from "./lib/utils.js";
-
-
+import {
+  ensureDir,
+  loadJson,
+  saveJsonCheckpoint,
+  listDirectories,
+} from "../lib/utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -18,7 +21,11 @@ export async function classify() {
     return;
   }
 
-  const classifyDir = path.join(CLASSIFY_ROOT, enrichRun.dayDir, enrichRun.stampDir);
+  const classifyDir = path.join(
+    CLASSIFY_ROOT,
+    enrichRun.dayDir,
+    enrichRun.stampDir
+  );
   await ensureDir(classifyDir);
 
   const classified = enrichRun.content.items.map((item) => ({
@@ -39,7 +46,10 @@ export async function classify() {
     generatedAt: new Date().toISOString(),
   });
 
-  console.log("Classify complete:", { itemCount: classified.length, dir: classifyDir });
+  console.log("Classify complete:", {
+    itemCount: classified.length,
+    dir: classifyDir,
+  });
 }
 
 async function getLatestRun(root) {
