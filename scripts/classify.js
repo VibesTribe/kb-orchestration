@@ -5,106 +5,108 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
-const ENRICH_ROOT = path.join(ROOT_DIR, "data", "enrich");
-const CLASSIFY_ROOT = path.join(ROOT_DIR, "data", "classify");
+const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
+const STATE_FILE = path.join(CACHE_DIR, "classify-state.json");
+const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
 
-/**
- * Ensure a directory exists (recursively).
- */
+/* ------------------ Helpers ------------------ */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
-/**
- * Save JSON to a file (checkpoint style).
- */
-async function saveJsonCheckpoint(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  const json = JSON.stringify(data, null, 2);
-  await fs.writeFile(filePath, json, "utf8");
-}
-
-/**
- * Load JSON from a file if it exists, otherwise return fallback.
- */
-async function loadJson(filePath, fallback) {
+async function loadJson(file, fallback) {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(await fs.readFile(file, "utf8"));
   } catch {
     return fallback;
   }
 }
 
-/**
- * List immediate subdirectories of a parent directory.
- */
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-/**
- * Get the most recent run (day + timestamp) from a data root.
- */
-async function getLatestRun(root) {
-  const dayDirs = await listDirectories(root);
-  if (!dayDirs.length) return null;
-  dayDirs.sort().reverse();
-  for (const day of dayDirs) {
-    const stampDirs = await listDirectories(path.join(root, day));
-    stampDirs.sort().reverse();
-    for (const stamp of stampDirs) {
-      const file = path.join(root, day, stamp, "items.json");
-      const content = await loadJson(file, null);
-      if (content) return { dayDir: day, stampDir: stamp, content };
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
+}
+
+/* ------------------ Classification stub ------------------ */
+// TODO: Replace with real classifier (LLM / model-based)
+async function classifyItem(item) {
+  // A fake rule-based classifier just for scaffolding
+  if (item.title?.toLowerCase().includes("ai")) {
+    return [
+      {
+        project: "AI Research",
+        projectKey: "ai-research",
+        usefulness: "high",
+        reason: "Mentions AI directly in title/summary."
+      }
+    ];
+  }
+  return [
+    {
+      project: "General",
+      projectKey: "general",
+      usefulness: "medium",
+      reason: "Default bucket for unclassified items."
+    }
+  ];
+}
+
+/* ------------------ State ------------------ */
+async function loadState() {
+  return loadJson(STATE_FILE, { classifiedIds: [] });
+}
+
+async function saveState(state) {
+  await saveJson(STATE_FILE, state);
+}
+
+/* ------------------ Main ------------------ */
+export async function classify() {
+  const kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
+  const state = await loadState();
+
+  let updated = 0;
+
+  for (const item of kb.items) {
+    if (state.classifiedIds.includes(item.id)) continue;
+    if (item.assignedProjects && item.assignedProjects.length > 0) continue;
+
+    try {
+      const assignedProjects = await classifyItem(item);
+      item.assignedProjects = assignedProjects;
+      state.classifiedIds.push(item.id);
+      updated++;
+
+      // Save incrementally
+      await saveJson(KNOWLEDGE_FILE, kb);
+      await saveState(state);
+
+      log(`Classified item ${item.id}`, { title: item.title });
+    } catch (err) {
+      log(`Failed to classify item ${item.id}`, { error: err.message });
+      await saveJson(KNOWLEDGE_FILE, kb);
+      await saveState(state);
+      throw err;
     }
   }
-  return null;
-}
 
-/**
- * Classify step — assigns projects, tags, usefulness.
- */
-export async function classify() {
-  const enrichRun = await getLatestRun(ENRICH_ROOT);
-  if (!enrichRun) {
-    console.log("No enriched data found; skip classify");
-    return;
+  if (updated === 0) {
+    log("No items needed classification");
+  } else {
+    log(`Classified ${updated} new items`);
   }
-
-  const classifyDir = path.join(CLASSIFY_ROOT, enrichRun.dayDir, enrichRun.stampDir);
-  await ensureDir(classifyDir);
-
-  const classified = enrichRun.content.items.map((item) => ({
-    ...item,
-    tags: ["auto-tag"],
-    projects: [
-      {
-        project: "Vibeflow",
-        projectKey: "vibeflow",
-        usefulness: "HIGH",
-        reason: "Demo classification",
-      },
-    ],
-  }));
-
-  await saveJsonCheckpoint(path.join(classifyDir, "items.json"), {
-    items: classified,
-    generatedAt: new Date().toISOString(),
-  });
-
-  console.log("Classify complete:", { itemCount: classified.length, dir: classifyDir });
 }
 
-// Run if invoked directly
+/* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
   classify().catch((err) => {
     console.error("Classify failed", err);
     process.exitCode = 1;
   });
 }
+
