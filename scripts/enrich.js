@@ -3,78 +3,90 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/* ------------------ Local utilities ------------------ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
+const STATE_FILE = path.join(CACHE_DIR, "enrich-state.json");
+const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
+
+/* ------------------ Helpers ------------------ */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
-async function saveJsonCheckpoint(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  const json = JSON.stringify(data, null, 2);
-  await fs.writeFile(filePath, json, "utf8");
-}
-async function loadJson(filePath, fallback) {
+
+async function loadJson(file, fallback) {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(await fs.readFile(file, "utf8"));
   } catch {
     return fallback;
   }
 }
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
+
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-/* ------------------ Paths ------------------ */
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
-const ENRICH_ROOT = path.join(ROOT_DIR, "data", "enrich");
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
+}
 
-/* ------------------ Enrich step ------------------ */
+/* ------------------ Enrichment stub ------------------ */
+// TODO: Replace this with real LLM enrichment (OpenRouter API etc.)
+async function generateSummary(item) {
+  return {
+    summary: `This is a placeholder summary for "${item.title}".`,
+    description: `Detailed description for ${item.url}.`
+  };
+}
+
+/* ------------------ State ------------------ */
+async function loadState() {
+  return loadJson(STATE_FILE, { enrichedIds: [] });
+}
+
+async function saveState(state) {
+  await saveJson(STATE_FILE, state);
+}
+
+/* ------------------ Main ------------------ */
 export async function enrich() {
-  const ingestRun = await getLatestRun(INGEST_ROOT);
-  if (!ingestRun) {
-    console.log("No ingested data found; skip enrich");
-    return;
-  }
+  const kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
+  const state = await loadState();
 
-  const enrichDir = path.join(ENRICH_ROOT, ingestRun.dayDir, ingestRun.stampDir);
-  await ensureDir(enrichDir);
+  let updated = 0;
 
-  // Simple demo enrichment: add a `summary`
-  const enriched = ingestRun.content.items.map((item) => ({
-    ...item,
-    summary: `Enriched summary for ${item.title}`,
-  }));
+  for (const item of kb.items) {
+    if (state.enrichedIds.includes(item.id)) continue;
+    if (item.summary && item.description) continue;
 
-  await saveJsonCheckpoint(path.join(enrichDir, "items.json"), {
-    items: enriched,
-    generatedAt: new Date().toISOString(),
-  });
+    try {
+      const { summary, description } = await generateSummary(item);
+      item.summary = summary;
+      item.description = description;
+      state.enrichedIds.push(item.id);
+      updated++;
 
-  console.log("Enrich complete:", { itemCount: enriched.length, dir: enrichDir });
-}
+      // Save incrementally
+      await saveJson(KNOWLEDGE_FILE, kb);
+      await saveState(state);
 
-/* ------------------ Helper ------------------ */
-async function getLatestRun(root) {
-  const dayDirs = await listDirectories(root);
-  if (!dayDirs.length) return null;
-  dayDirs.sort().reverse();
-  for (const day of dayDirs) {
-    const stampDirs = await listDirectories(path.join(root, day));
-    stampDirs.sort().reverse();
-    for (const stamp of stampDirs) {
-      const file = path.join(root, day, stamp, "items.json");
-      const content = await loadJson(file, null);
-      if (content) return { dayDir: day, stampDir: stamp, content };
+      log(`Enriched item ${item.id}`, { title: item.title });
+    } catch (err) {
+      log(`Failed to enrich item ${item.id}`, { error: err.message });
+      // Save partial state so we don’t lose progress
+      await saveJson(KNOWLEDGE_FILE, kb);
+      await saveState(state);
+      throw err; // Let pipeline retry
     }
   }
-  return null;
+
+  if (updated === 0) {
+    log("No items needed enrichment");
+  } else {
+    log(`Enriched ${updated} new items`);
+  }
 }
 
 /* ------------------ Run direct ------------------ */
