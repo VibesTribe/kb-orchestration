@@ -39,27 +39,33 @@ export async function digest() {
   const projects = await loadProjects();
   const projectMap = new Map(projects.map((project) => [project.key, project]));
 
-  const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
+  const digestDir = path.join(
+    DIGEST_ROOT,
+    curatedRun.dayDir,
+    curatedRun.stampDir
+  );
   await ensureDir(digestDir);
 
   const jsonPath = path.join(digestDir, "digest.json");
   const textPath = path.join(digestDir, "digest.txt");
 
   // Load previous checkpoint if it exists
-  const digestPayload =
-    (await loadJson(jsonPath, null)) || {
-      generatedAt: new Date().toISOString(),
-      subject: "",
-      totalHigh: 0,
-      totalModerate: 0,
-      projects: []
-    };
+  const digestPayload = (await loadJson(jsonPath, null)) || {
+    generatedAt: new Date().toISOString(),
+    subject: "",
+    totalHigh: 0,
+    totalModerate: 0,
+    projects: []
+  };
 
   // Process projects incrementally
   for (const [projectKey, project] of projectMap.entries()) {
     if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
-    const { high, moderate } = collectItemsForProject(curatedRun.content, project);
+    const { high, moderate } = collectItemsForProject(
+      curatedRun.content,
+      project
+    );
 
     if (!high.length && !moderate.length) continue;
 
@@ -78,6 +84,7 @@ export async function digest() {
 
     digestPayload.subject = `Daily Digest – ${digestPayload.totalHigh} Highly Useful + ${digestPayload.totalModerate} Moderately Useful`;
 
+    // Save checkpoint after each project
     await saveJsonCheckpoint(jsonPath, digestPayload);
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
 
@@ -119,7 +126,8 @@ function collectItemsForProject(curated, project) {
 
   for (const item of curated.items ?? []) {
     const assignment = (item.projects ?? []).find(
-      (entry) => entry.projectKey === project.key || entry.project === project.name
+      (entry) =>
+        entry.projectKey === project.key || entry.project === project.name
     );
     if (!assignment) continue;
 
@@ -145,172 +153,167 @@ function buildDigestEntry(item, assignment) {
   };
 }
 
+// 🟢 HTML rendering
 function renderHtmlDigest(payload) {
-  const dateStr = new Date(payload.generatedAt).toLocaleString("en-US", {
-    dateStyle: "long",
-    timeStyle: "short"
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
   });
 
+  const header = `
+    <h1 style="font-size:20px; font-weight:400; font-family: 'Open Sans', Verdana, sans-serif; margin:0 0 4px;">Daily Digest</h1>
+    <p style="font-size:14px; color:#6b7280; margin:0 0 16px; font-family:'Inter','Helvetica Neue',Arial,sans-serif;">
+      ${dateStr}<br>
+      News You Can Use Today:<br>
+      ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful
+    </p>
+  `;
+
+  const projectSections = payload.projects
+    .map((project) => {
+      const high = project.high
+        .map((entry) => renderHtmlEntry(entry, "HIGHLY USEFUL"))
+        .join("");
+      const moderate = project.moderate
+        .map((entry) => renderHtmlEntry(entry, "MODERATELY USEFUL"))
+        .join("");
+
+      const changelog =
+        project.changelog.length > 0
+          ? `<div style="margin-top:12px;">
+               <h4 style="font-size:15px; font-weight:500; margin:8px 0;">Recent Changelog Notes</h4>
+               <ul style="margin:4px 0 0 16px; padding:0; color:#374151; font-size:14px; line-height:1.5;">
+                 ${project.changelog
+                   .map((note) => `<li>${note}</li>`)
+                   .join("\n")}
+               </ul>
+             </div>`
+          : "";
+
+      return `
+        <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 8px;">${project.name}</h2>
+        <p style="margin:0 0 12px; color:#374151; font-size:14px; line-height:1.5;">${project.summary}</p>
+        ${high}${moderate}${changelog}
+      `;
+    })
+    .join('<hr style="border:none; border-top:1px solid #e5e7eb; margin:20px 0;">');
+
   return `
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Daily Digest</title>
-  </head>
-  <body style="font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 0;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; padding: 20px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 12px; padding: 24px; text-align: left;">
-            <tr>
-              <td>
-                <h1 style="color: #111827; font-size: 20px; font-weight:400; margin: 0 0 12px; font-family: 'Open Sans', Verdana, sans-serif;">Daily Digest</h1>
-                <p style="color: #6b7280; font-size: 14px; margin: 0 0 16px; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;">
-                  ${dateStr}<br>
-                  News You Can Use Today:<br>
-                  ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful
-                </p>
-                ${payload.projects
-                  .map(
-                    (project) => `
-                <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 12px; color:#111827; font-family: 'Open Sans', Verdana, sans-serif;">${project.name}</h2>
-                <p style="font-size:14px; color:#374151; margin:0 0 12px;">${project.summary}</p>
-                ${renderProjectItems(project)}
-                `
-                  )
-                  .join("<hr style='border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;' />")}
-                <p style="text-align: center; margin: 0; font-size: 14px; color: #374151; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;">
-                  You can still browse all recent updates, even those not flagged as useful:<br>
-                  <a href="https://vibestribe.github.io/kb-site/" style="color: #2563eb; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;">View this digest on KB-site</a>
-                </p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
+  <div style="font-family:'Inter','Helvetica Neue',Arial,sans-serif; background:#f9fafb; padding:20px;">
+    <div style="max-width:600px; margin:0 auto; background:#fff; border-radius:12px; padding:24px;">
+      ${header}
+      ${projectSections}
+      <hr style="border:none; border-top:1px solid #e5e7eb; margin:20px 0;">
+      <p style="font-size:14px; color:#374151; text-align:center;">
+        You can still browse all recent updates, even those not flagged as useful:<br>
+        <a href="https://vibestribe.github.io/kb-site/" style="color:#2563eb;">View this digest on KB-site</a>
+      </p>
+    </div>
+  </div>
   `;
 }
 
-function renderProjectItems(project) {
-  const sections = [];
-
-  if (project.high.length) {
-    sections.push(`
-      <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:16px;">
-        <h3 style="font-size:16px; font-weight:500; color:#065f46; margin:0 0 8px; font-family: 'Open Sans', Verdana, sans-serif;">High Usefulness</h3>
-        ${project.high
-          .map(
-            (entry) => `
-          <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0; line-height:1.5;">${entry.summary}</p>
-          <p style="font-size:14px; color:#065f46; margin:4px 0; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0;">Next steps: ${entry.nextSteps}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0;">Published: ${new Date(
-            entry.publishedAt
-          ).toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" })}</p>
-          <a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>
-        `
-          )
-          .join("<br/>")}
-      </div>
-    `);
-  }
-
-  if (project.moderate.length) {
-    sections.push(`
-      <div style="background:#fbfaff; border-radius:8px; padding:12px; margin-bottom:16px;">
-        <h3 style="font-size:16px; font-weight:500; color:#5b21b6; margin:0 0 8px; font-family: 'Open Sans', Verdana, sans-serif;">Moderate Usefulness</h3>
-        ${project.moderate
-          .map(
-            (entry) => `
-          <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0; line-height:1.5;">${entry.summary}</p>
-          <p style="font-size:14px; color:#5b21b6; margin:4px 0; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0;">Next steps: ${entry.nextSteps}</p>
-          <p style="font-size:14px; color:#374151; margin:4px 0;">Published: ${new Date(
-            entry.publishedAt
-          ).toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" })}</p>
-          <a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>
-        `
-          )
-          .join("<br/>")}
-      </div>
-    `);
-  }
-
-  if (project.changelog.length) {
-    sections.push(`
-      <div style="margin-bottom:20px;">
-        <h3 style="font-size:15px; font-weight:500; color:#374151; margin:0 0 8px; font-family: 'Open Sans', Verdana, sans-serif;">Recent Changelog Notes</h3>
-        <ul style="padding-left:20px; margin:0; color:#374151; font-size:14px;">
-          ${project.changelog.map((note) => `<li>${note}</li>`).join("")}
-        </ul>
-      </div>
-    `);
-  }
-
-  return sections.join("");
+function renderHtmlEntry(entry, label) {
+  const color =
+    label === "HIGHLY USEFUL" ? "#065f46" : "#5b21b6";
+  return `
+    <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:12px;">
+      <h3 style="font-size:16px; font-weight:500; color:${color}; margin:0 0 6px;">${label}</h3>
+      <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
+      <p style="margin:4px 0; font-size:14px; color:#374151; line-height:1.5;">${entry.summary}</p>
+      ${
+        entry.reason
+          ? `<p style="margin:4px 0; font-size:14px; color:${color}; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>`
+          : ""
+      }
+      ${
+        entry.nextSteps
+          ? `<p style="margin:4px 0; font-size:14px; color:${color}; line-height:1.5;"><em>Next steps:</em> ${entry.nextSteps}</p>`
+          : ""
+      }
+      ${
+        entry.publishedAt
+          ? `<p style="margin:4px 0; font-size:14px; color:#374151;">Published: ${new Date(
+              entry.publishedAt
+            ).toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric"
+            })}</p>`
+          : ""
+      }
+      ${
+        entry.url
+          ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>`
+          : ""
+      }
+    </div>
+  `;
 }
 
+// 🟢 Plain-text fallback
 function renderTextDigest(payload) {
-  const dateStr = new Date(payload.generatedAt).toLocaleString("en-US", {
-    dateStyle: "long",
-    timeStyle: "short"
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
   });
 
   const lines = [];
   lines.push("Daily Digest");
   lines.push(dateStr);
   lines.push("News You Can Use Today:");
-  lines.push(`${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`);
+  lines.push(
+    `${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
+  );
   lines.push("");
 
   for (const project of payload.projects) {
-    lines.push(`# ${project.name}`);
-    if (project.summary) lines.push(`Summary: ${project.summary}`);
+    lines.push(project.name);
+    if (project.summary) lines.push(project.summary);
     lines.push("");
 
     if (project.high.length) {
-      lines.push("## High Usefulness");
-      for (const entry of project.high) lines.push(formatEntry(entry));
+      lines.push("Highly Useful");
+      for (const entry of project.high) lines.push(formatTextEntry(entry));
       lines.push("");
     }
 
     if (project.moderate.length) {
-      lines.push("## Moderate Usefulness");
-      for (const entry of project.moderate) lines.push(formatEntry(entry));
+      lines.push("Moderately Useful");
+      for (const entry of project.moderate) lines.push(formatTextEntry(entry));
       lines.push("");
     }
 
     if (project.changelog.length) {
-      lines.push("## Recent Changelog Notes");
-      for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
+      lines.push("Recent Changelog Notes");
+      for (const note of project.changelog) lines.push(`- ${note}`);
       lines.push("");
     }
   }
 
-  lines.push("You can still browse all recent updates, even those not flagged as useful:");
-  lines.push("https://vibestribe.github.io/kb-site/");
+  lines.push(
+    "You can still browse all recent updates, even those not flagged as useful:"
+  );
+  lines.push("View this digest on KB-site → https://vibestribe.github.io/kb-site/");
 
   return lines.join("\n");
 }
 
-function formatEntry(entry) {
+function formatTextEntry(entry) {
   const lines = [];
-  lines.push(`- ${entry.title} (${entry.usefulness})`);
+  lines.push(`- ${entry.title}`);
   if (entry.url) lines.push(`  URL: ${entry.url}`);
   if (entry.summary) lines.push(`  Summary: ${entry.summary}`);
   if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
   if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
   if (entry.publishedAt)
     lines.push(
-      `  Published: ${new Date(entry.publishedAt).toLocaleString("en-US", {
-        dateStyle: "long",
-        timeStyle: "short"
+      `  Published: ${new Date(entry.publishedAt).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric"
       })}`
     );
   lines.push(`  Source: ${entry.sourceType}`);
@@ -365,6 +368,7 @@ async function loadProjects() {
   for (const dir of entries) {
     const projectDir = path.join(PROJECTS_ROOT, dir);
     const configPath = path.join(projectDir, "project.json");
+    const prdPath = path.join(projectDir, "prd.md");
     const changelogPath = path.join(projectDir, "changelog.md");
 
     const config = await loadJson(configPath, null);
@@ -399,3 +403,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+
