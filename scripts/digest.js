@@ -61,7 +61,8 @@ export async function digest() {
   }
 
   const projects = await loadProjects();
-  const projectMap = new Map(projects.map((p) => [p.key, p]));
+  const activeProjects = projects.filter((p) => p.status === "active");
+  const projectMap = new Map(activeProjects.map((p) => [p.key, p]));
 
   const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
   await ensureDir(digestDir);
