@@ -11,6 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+
     # Retry once automatically — second run resumes from last step
     strategy:
       fail-fast: false
@@ -19,9 +20,11 @@ jobs:
         attempt: [1, 2]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "npm"
@@ -29,14 +32,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 🔄 Refresh Raindrop token first (correct filename)
+      # 🔄 Refresh Raindrop token first (uses PAT mapped to GITHUB_TOKEN)
       - name: Refresh Raindrop token
         env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}           # PAT with repo+actions perms
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
-          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN             # writes refreshed token to this repo secret
         run: node scripts/refresh-raindrop.js
 
       - name: Execute pipeline (attempt ${{ matrix.attempt }})
@@ -52,6 +55,7 @@ jobs:
           KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
         run: npm run pipeline
 
+      # ✅ Useful artifacts for debugging/recovery (do not affect live site)
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -74,15 +78,4 @@ jobs:
         with:
           name: pipeline-state
           path: data/cache/pipeline-state.json
-          if-no-files-found: ignore
-
-      # ✅ Snapshot knowledge outputs from publish step
-      - name: Upload knowledge snapshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: knowledge-snapshot
-          path: |
-            data/publish/**/knowledge.json
-            data/publish/**/knowledge.graph.json
           if-no-files-found: ignore
