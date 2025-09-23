@@ -2,7 +2,13 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { saveJsonCheckpoint, saveTextCheckpoint, ensureDir, loadJson, listDirectories } from "./lib/utils.js";
+import {
+  saveJsonCheckpoint,
+  saveTextCheckpoint,
+  ensureDir,
+  loadJson,
+  listDirectories
+} from "./utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -29,7 +35,7 @@ export async function digest() {
   }
 
   const projects = await loadProjects();
-  const projectMap = new Map(projects.map((project) => [project.key, project]));
+  const projectMap = new Map(projects.map((p) => [p.key, p]));
 
   const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
   await ensureDir(digestDir);
@@ -37,22 +43,19 @@ export async function digest() {
   const jsonPath = path.join(digestDir, "digest.json");
   const textPath = path.join(digestDir, "digest.txt");
 
-  // Load previous checkpoint if it exists
-  const digestPayload = (await loadJson(jsonPath, null)) || {
-    generatedAt: new Date().toISOString(),
-    subject: "",
-    totalHigh: 0,
-    totalModerate: 0,
-    projects: []
-  };
+  const digestPayload =
+    (await loadJson(jsonPath, null)) || {
+      generatedAt: new Date().toISOString(),
+      subject: "",
+      totalHigh: 0,
+      totalModerate: 0,
+      projects: []
+    };
 
-  // Process projects incrementally
   for (const [projectKey, project] of projectMap.entries()) {
-    // Skip if already processed this project in checkpoint
     if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
     const { high, moderate } = collectItemsForProject(curatedRun.content, project);
-
     if (!high.length && !moderate.length) continue;
 
     const projectDigest = {
@@ -68,12 +71,16 @@ export async function digest() {
     digestPayload.totalHigh += high.length;
     digestPayload.totalModerate += moderate.length;
 
-    digestPayload.subject = `Knowledgebase Digest – ${digestPayload.totalHigh} High / ${digestPayload.totalModerate} Moderate items`;
+    digestPayload.subject = `Daily Digest – ${new Date(
+      digestPayload.generatedAt
+    ).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric"
+    })}`;
 
-    // Save checkpoint after each project
     await saveJsonCheckpoint(jsonPath, digestPayload);
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
-
     log("Checkpoint saved", { project: project.name });
   }
 
@@ -98,9 +105,13 @@ export async function digest() {
     return;
   }
 
+  const textContent = renderTextDigest(digestPayload);
+  const htmlContent = renderHtmlDigest(digestPayload);
+
   await sendBrevoEmail({
     subject: digestPayload.subject,
-    textContent: renderTextDigest(digestPayload),
+    textContent,
+    htmlContent,
     recipients
   });
 }
@@ -111,7 +122,7 @@ function collectItemsForProject(curated, project) {
 
   for (const item of curated.items ?? []) {
     const assignment = (item.projects ?? []).find(
-      (entry) => entry.projectKey === project.key || entry.project === project.name
+      (a) => a.projectKey === project.key || a.project === project.name
     );
     if (!assignment) continue;
 
@@ -139,52 +150,153 @@ function buildDigestEntry(item, assignment) {
 
 function renderTextDigest(payload) {
   const lines = [];
-  lines.push(payload.subject);
+  const date = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric"
+  });
+
+  lines.push(`Daily Digest – ${date}`);
   lines.push("");
-  lines.push(`Generated at: ${payload.generatedAt}`);
-  lines.push(`Total High: ${payload.totalHigh}`);
-  lines.push(`Total Moderate: ${payload.totalModerate}`);
+  lines.push(
+    `News You Can Use Today: ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
+  );
   lines.push("");
 
   for (const project of payload.projects) {
-    lines.push(`# ${project.name}`);
+    lines.push(`Project: ${project.name}`);
     if (project.summary) lines.push(`Summary: ${project.summary}`);
     lines.push("");
 
     if (project.high.length) {
-      lines.push("## High Usefulness");
-      for (const entry of project.high) lines.push(formatEntry(entry));
+      lines.push("High Usefulness");
+      for (const entry of project.high) lines.push(formatTextEntry(entry));
       lines.push("");
     }
 
     if (project.moderate.length) {
-      lines.push("## Moderate Usefulness");
-      for (const entry of project.moderate) lines.push(formatEntry(entry));
+      lines.push("Moderate Usefulness");
+      for (const entry of project.moderate) lines.push(formatTextEntry(entry));
       lines.push("");
     }
 
     if (project.changelog.length) {
-      lines.push("## Recent Changelog Notes");
+      lines.push("Recent Changelog Notes");
       for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
       lines.push("");
     }
   }
+
+  lines.push("----------------------------------------");
+  lines.push(
+    "You can browse all recent updates, even those not flagged as useful:"
+  );
+  lines.push(
+    `View this digest on KB-site → https://your-kb-site.com/digests/${date.replace(
+      /, /g,
+      "-"
+    )}/`
+  );
+
   return lines.join("\n");
 }
 
-function formatEntry(entry) {
-  const lines = [];
-  lines.push(`- **${entry.title}** (${entry.usefulness})`);
-  if (entry.url) lines.push(`  URL: ${entry.url}`);
-  if (entry.summary) lines.push(`  Summary: ${entry.summary}`);
-  if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
-  if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
-  if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
-  lines.push("  Source: " + entry.sourceType);
-  return lines.join("\n");
+function formatTextEntry(entry) {
+  const date = entry.publishedAt
+    ? new Date(entry.publishedAt).toLocaleString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      })
+    : "";
+
+  return [
+    `- ${entry.title}`,
+    entry.url ? `  URL: ${entry.url}` : null,
+    entry.summary ? `  Summary: ${entry.summary}` : null,
+    entry.reason ? `  Why it matters: ${entry.reason}` : null,
+    entry.nextSteps ? `  Next steps: ${entry.nextSteps}` : null,
+    date ? `  Published: ${date}` : null,
+    `  Source: ${entry.sourceType}`
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-async function sendBrevoEmail({ subject, textContent, recipients }) {
+function renderHtmlDigest(payload) {
+  const date = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric"
+  });
+
+  // Use the HTML template you finalized in Canvas:
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${payload.subject}</title>
+  </head>
+  <body style="font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 0;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f9fafb; padding: 20px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; border-radius: 12px; padding: 24px; text-align: left;">
+            <tr>
+              <td>
+                <h1 style="color: #111827; font-size: 20px; font-weight:400; margin: 0 0 12px; font-family: 'Open Sans', Verdana, sans-serif;">Daily Digest</h1>
+                <p style="color: #6b7280; font-size: 14px; margin: 0 0 24px;">${date}</p>
+                ${payload.projects
+                  .map(
+                    (project) => `
+                <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 12px; color:#111827; font-family: 'Open Sans', Verdana, sans-serif;">${project.name}</h2>
+                ${project.high
+                  .map(
+                    (entry) => `
+                <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:16px;">
+                  <h3 style="font-size:16px; font-weight:500; color:#065f46; margin:0 0 8px;">High Usefulness</h3>
+                  <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
+                  <p style="font-size:14px; color:#374151; margin:4px 0;">${entry.summary}</p>
+                  <p style="font-size:14px; color:#065f46; margin:4px 0;"><em>Why it matters:</em> ${entry.reason}</p>
+                  <a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>
+                </div>`
+                  )
+                  .join("")}
+                ${project.moderate
+                  .map(
+                    (entry) => `
+                <div style="background:#fbfaff; border-radius:8px; padding:12px; margin-bottom:20px;">
+                  <h3 style="font-size:16px; font-weight:500; color:#5b21b6; margin:0 0 8px;">Moderate Usefulness</h3>
+                  <p style="margin:4px 0; font-size:15px; font-weight:500;">${entry.title}</p>
+                  <p style="font-size:14px; color:#374151; margin:4px 0;">${entry.summary}</p>
+                  <p style="font-size:14px; color:#5b21b6; margin:4px 0;"><em>Why it matters:</em> ${entry.reason}</p>
+                  <a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>
+                </div>`
+                  )
+                  .join("")}
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />`
+                  )
+                  .join("")}
+                <p style="text-align: center; margin: 0; font-size: 14px; color: #374151;">
+                  You can still browse all recent updates, even those not flagged as useful:<br>
+                  <a href="https://your-kb-site.com/digests/${date.replace(
+                    /, /g,
+                    "-"
+                  )}/" style="color: #2563eb;">View this digest on KB-site</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
   try {
     const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
@@ -196,7 +308,8 @@ async function sendBrevoEmail({ subject, textContent, recipients }) {
         sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
         to: recipients.map((email) => ({ email })),
         subject,
-        textContent
+        textContent,
+        htmlContent
       })
     });
     if (!response.ok) throw new Error(`Brevo error: ${response.status} ${await response.text()}`);
