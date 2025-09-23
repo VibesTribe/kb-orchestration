@@ -2,7 +2,8 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadJson, saveJson } from "./lib/utils.js";
+import { ensureDir, loadJson, saveJson } from "./lib/utils.js";
+
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
