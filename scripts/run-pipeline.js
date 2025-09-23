@@ -1,4 +1,3 @@
-// run-pipeline.js
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
 import { digest } from "./digest.js";
 import { publish } from "./publish.js";
+import { buildSystemStatus } from "./system-status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -58,15 +58,20 @@ export async function runPipeline() {
       logStep(`✅ Completed ${step.name}`);
       state.completed.push(step.name);
       await saveState(state);
+
+      // 🔄 Update system status after each step
+      await buildSystemStatus();
     } catch (error) {
       console.error(`❌ ${step.name} failed`, { error: error.message });
-      await saveState(state); // keep progress
+      await saveState(state);
+      await buildSystemStatus();
       throw error;
     }
   }
 
   logStep("🎉 Pipeline finished successfully");
   await saveState({ completed: [] }); // reset for next run
+  await buildSystemStatus();
 }
 
 // Run if invoked directly
