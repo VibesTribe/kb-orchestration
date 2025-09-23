@@ -1,10 +1,10 @@
-name: Mock Digest Preview
+name: Digest Mock
 
 on:
   workflow_dispatch:
 
 jobs:
-  mock-digest:
+  run-mock:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +17,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Send mock digest email
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
-          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
-          BREVO_TO: ${{ secrets.BREVO_TO }}
+      - name: Run mock digest
         run: node scripts/digest-mock.js
+
+      - name: Upload mock digest artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-digest
+          path: |
+            data/digest/**
+          if-no-files-found: error
