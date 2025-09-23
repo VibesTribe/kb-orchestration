@@ -85,3 +85,34 @@ async function createMockCuratedRun() {
           projectKey: "webs-of-wisdom",
           usefulness: "MODERATE",
           reason: "Offers inspiration for enhancing storytelling modules.",
+          nextSteps: "Discuss with design team."
+        }
+      ]
+    }
+  ];
+
+  const curatedPayload = {
+    generatedAt: now.toISOString(),
+    items
+  };
+
+  await fs.writeFile(
+    path.join(mockDir, "items.json"),
+    JSON.stringify(curatedPayload, null, 2),
+    "utf8"
+  );
+
+  console.log("✅ Mock curated run created at", mockDir);
+}
+
+async function runMockDigest() {
+  await createMockCuratedRun();
+  await digest();
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runMockDigest().catch((error) => {
+    console.error("Mock digest failed", error);
+    process.exitCode = 1;
+  });
+}
