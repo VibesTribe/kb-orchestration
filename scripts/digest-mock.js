@@ -1,89 +1,88 @@
-import { ensureDir, saveJsonCheckpoint } from "./lib/utils.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureDir, saveJsonCheckpoint } from "./lib/utils.js";
+import { digest } from "./digest.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
-const DIGEST_ROOT = path.join(ROOT_DIR, "data", "digest");
+const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 
-const mockDigest = {
+const mockCurated = {
   generatedAt: new Date().toISOString(),
-  subject: "Daily Digest – 2 Highly Useful + 1 Moderately Useful",
-  totalHigh: 2,
-  totalModerate: 1,
-  projects: [
+  items: [
     {
-      key: "vibeflow",
-      name: "Vibeflow",
-      summary:
-        "Human-in-the-loop AI orchestration system that keeps non-technical users in strategic control while automating modular agent workflows.",
-      high: [
+      canonicalId: "item-flowkit",
+      title: "New Agent Framework (FlowKit)",
+      url: "https://original-resource.com/flowkit-release",
+      summary: "FlowKit framework improves subagent orchestration for complex workflows.",
+      description: "",
+      publishedAt: new Date().toISOString(),
+      sourceType: "youtube",
+      projects: [
         {
-          title: "New Agent Framework (FlowKit)",
-          url: "https://original-resource.com/flowkit-release",
-          summary: "FlowKit framework improves subagent orchestration for complex workflows.",
+          project: "Vibeflow",
+          projectKey: "vibeflow",
           usefulness: "HIGH",
           reason: "Improves Vibeflow build-phase orchestration efficiency without adding overhead.",
-          nextSteps: "Evaluate integration with existing orchestrator.",
-          publishedAt: new Date().toISOString(),
-          sourceType: "youtube"
+          nextSteps: "Evaluate integration with existing orchestrator."
         }
       ],
-      moderate: [
-        {
-          title: "Blog on token optimization",
-          url: "https://original-resource.com/token-blog",
-          summary: "Tips on reducing token usage to avoid exceeding free tier quotas.",
-          usefulness: "MODERATE",
-          reason: "Helps lower Vibeflow runtime costs when scaling tasks with multiple agents.",
-          nextSteps: "Adopt best practices for prompt design.",
-          publishedAt: new Date().toISOString(),
-          sourceType: "rss"
-        }
-      ],
-      changelog: [
-        "- 2025-09-20: Imported PRD v2.0 and initial project metadata into kb-orchestration.",
-        "- 2025-09-21: Added token usage tracking system.",
-        "- 2025-09-22: Integrated FlowKit framework for agent orchestration."
-      ]
+      assignedProjects: ["Vibeflow"]
     },
     {
-      key: "websofwisdom",
-      name: "Webs of Wisdom",
-      summary: "Storytelling and genealogy platform that weaves family histories with interactive multimedia.",
-      high: [
+      canonicalId: "item-token-blog",
+      title: "Blog on token optimization",
+      url: "https://original-resource.com/token-blog",
+      summary: "Tips on reducing token usage to avoid exceeding free tier quotas.",
+      description: "",
+      publishedAt: new Date().toISOString(),
+      sourceType: "rss",
+      projects: [
         {
-          title: "New Family Tree Visualization Tool",
-          url: "https://original-resource.com/tree-visualization",
-          summary: "Interactive visualization for genealogical data with collapsible branches.",
-          usefulness: "HIGH",
-          reason: "Could be integrated into Webs of Wisdom for better user navigation.",
-          nextSteps: "Prototype with sample genealogical data.",
-          publishedAt: new Date().toISOString(),
-          sourceType: "github"
+          project: "Vibeflow",
+          projectKey: "vibeflow",
+          usefulness: "MODERATE",
+          reason: "Helps lower Vibeflow runtime costs when scaling tasks with multiple agents.",
+          nextSteps: "Adopt best practices for prompt design."
         }
       ],
-      moderate: [],
-      changelog: [
-        "- 2025-09-19: Added multimedia attachment support for stories.",
-        "- 2025-09-21: Improved search for genealogical data sources."
-      ]
+      assignedProjects: ["Vibeflow"]
+    },
+    {
+      canonicalId: "item-tree-visualizer",
+      title: "New Family Tree Visualization Tool",
+      url: "https://original-resource.com/tree-visualization",
+      summary: "Interactive visualization for genealogical data with collapsible branches.",
+      description: "",
+      publishedAt: new Date().toISOString(),
+      sourceType: "github",
+      projects: [
+        {
+          project: "Webs of Wisdom",
+          projectKey: "websofwisdom",
+          usefulness: "HIGH",
+          reason: "Could be integrated into Webs of Wisdom for better user navigation.",
+          nextSteps: "Prototype with sample genealogical data."
+        }
+      ],
+      assignedProjects: ["Webs of Wisdom"]
     }
   ]
 };
 
 async function main() {
-  const digestDir = path.join(
-    DIGEST_ROOT,
-    new Date().toISOString().slice(0, 10),
-    "mock-run"
-  );
-  await ensureDir(digestDir);
+  const dayDir = new Date().toISOString().slice(0, 10);
+  const stampDir = "mock-run";
+  const curatedDir = path.join(CURATED_ROOT, dayDir, stampDir);
+  await ensureDir(curatedDir);
 
-  const jsonPath = path.join(digestDir, "digest.json");
-  await saveJsonCheckpoint(jsonPath, mockDigest);
+  const itemsPath = path.join(curatedDir, "items.json");
+  await saveJsonCheckpoint(itemsPath, mockCurated);
 
-  console.log("Mock digest saved", { jsonPath });
+  console.log("Mock curated data saved", { itemsPath });
+
+  // Now run the normal digest logic, which will send the email
+  await digest();
 }
 
 main().catch((err) => {
