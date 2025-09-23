@@ -18,6 +18,11 @@ jobs:
         run: npm ci
 
       - name: Run mock digest
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
         run: node scripts/digest-mock.js
 
       - name: Upload mock digest artifacts
