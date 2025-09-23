@@ -70,4 +70,146 @@ async function fetchRaindropItems(collectionId, window) {
       title: "Demo Raindrop Bookmark",
       url: "https://example.com/bookmark",
       sourceType: "raindrop",
-      co
+      collection: collectionId,
+      publishedAt: new Date().toISOString(),
+    },
+  ];
+}
+
+async function fetchYoutubePlaylistItems(playlistId) {
+  return [
+    {
+      id: `yt-playlist-${playlistId}-${Date.now()}`,
+      title: "Demo YouTube Playlist Video",
+      url: "https://youtube.com/watch?v=demo",
+      sourceType: "youtube-playlist",
+      publishedAt: new Date().toISOString(),
+    },
+  ];
+}
+
+async function fetchYoutubeChannelItems(handle, window) {
+  return [
+    {
+      id: `yt-channel-${handle}-${Date.now()}`,
+      title: `Demo video from ${handle}`,
+      url: "https://youtube.com/watch?v=demo",
+      sourceType: "youtube-channel",
+      publishedAt: new Date().toISOString(),
+    },
+  ];
+}
+
+async function fetchRssItems(feedId, url, window) {
+  return [
+    {
+      id: `rss-${feedId}-${Date.now()}`,
+      title: `Demo RSS article from ${feedId}`,
+      url,
+      sourceType: "rss",
+      publishedAt: new Date().toISOString(),
+    },
+  ];
+}
+
+/* ------------------ Main ingest ------------------ */
+export async function ingest() {
+  const sources = await loadSources();
+  const state = await loadState();
+  const kb = await loadKnowledge();
+
+  const newItems = [];
+
+  /* ---- Raindrop ---- */
+  for (const c of sources.raindrop.collections ?? []) {
+    if (c.mode === "pause") continue;
+
+    if (c.mode === "once" && state.completedOnce[`raindrop-${c.id}`]) continue;
+
+    const items = await fetchRaindropItems(c.id, c.window ?? sources.raindrop.defaultWindow);
+    for (const item of items) {
+      item.collection = normalizeCollection(c.name ?? c.id);
+      if (!kb.items.find((i) => i.id === item.id)) {
+        kb.items.push(item);
+        newItems.push(item);
+      }
+    }
+
+    if (c.mode === "once") state.completedOnce[`raindrop-${c.id}`] = true;
+  }
+
+  /* ---- YouTube playlists ---- */
+  for (const p of sources.youtube.playlists ?? []) {
+    if (p.mode === "pause") continue;
+    if (p.mode === "once" && state.completedOnce[`yt-playlist-${p.id}`]) continue;
+
+    const items = await fetchYoutubePlaylistItems(p.id);
+    for (const item of items) {
+      if (!kb.items.find((i) => i.id === item.id)) {
+        kb.items.push(item);
+        newItems.push(item);
+      }
+    }
+
+    if (p.mode === "once") state.completedOnce[`yt-playlist-${p.id}`] = true;
+  }
+
+  /* ---- YouTube channels ---- */
+  for (const c of sources.youtube.channels ?? []) {
+    if (c.mode === "pause") continue;
+
+    if (c.mode === "weekly-once" && state.completedOnce[`yt-channel-weekly-${c.handle}`]) {
+      // already did 7-day pull → fall back to daily
+      const items = await fetchYoutubeChannelItems(c.handle, sources.youtube.defaultWindow);
+      for (const item of items) {
+        if (!kb.items.find((i) => i.id === item.id)) {
+          kb.items.push(item);
+          newItems.push(item);
+        }
+      }
+    } else {
+      const items = await fetchYoutubeChannelItems(c.handle, c.window ?? sources.youtube.defaultWindow);
+      for (const item of items) {
+        if (!kb.items.find((i) => i.id === item.id)) {
+          kb.items.push(item);
+          newItems.push(item);
+        }
+      }
+      if (c.mode === "weekly-once") state.completedOnce[`yt-channel-weekly-${c.handle}`] = true;
+    }
+  }
+
+  /* ---- RSS feeds ---- */
+  for (const f of sources.rss ?? []) {
+    if (f.mode === "pause") continue;
+    if (f.mode === "once" && state.completedOnce[`rss-${f.id}`]) continue;
+
+    const items = await fetchRssItems(f.id, f.url, f.window);
+    for (const item of items) {
+      if (!kb.items.find((i) => i.id === item.id)) {
+        kb.items.push(item);
+        newItems.push(item);
+      }
+    }
+
+    if (f.mode === "once") state.completedOnce[`rss-${f.id}`] = true;
+  }
+
+  /* ---- Save everything ---- */
+  if (newItems.length) {
+    log(`Ingested ${newItems.length} new items`, { newItems: newItems.length });
+    await saveKnowledge(kb);
+  } else {
+    log("No new items found this run");
+  }
+
+  await saveState(state);
+}
+
+/* ------------------ Run direct ------------------ */
+if (import.meta.url === `file://${process.argv[1]}`) {
+  ingest().catch((err) => {
+    console.error("Ingest failed", err);
+    process.exitCode = 1;
+  });
+}
