@@ -3,51 +3,71 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/* ------------------ Local utilities ------------------ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
+const STATE_FILE = path.join(CACHE_DIR, "ingest-state.json");
+const SOURCES_FILE = path.join(ROOT_DIR, "sources.json");
+const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
+
+/* ------------------ Helpers ------------------ */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
-async function saveJsonCheckpoint(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  const json = JSON.stringify(data, null, 2);
-  await fs.writeFile(filePath, json, "utf8");
+
+async function loadJson(file, fallback) {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return fallback;
+  }
 }
 
-/* ------------------ Paths ------------------ */
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+}
 
-/* ------------------ Ingest step ------------------ */
-export async function ingest() {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dayDir = new Date().toISOString().split("T")[0];
-  const ingestDir = path.join(INGEST_ROOT, dayDir, timestamp);
-  await ensureDir(ingestDir);
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
+}
 
-  // Placeholder demo item (Raindrop/YouTube/RSS can be added here later)
-  const items = [
+/* ------------------ Source loading ------------------ */
+async function loadSources() {
+  return loadJson(SOURCES_FILE, { raindrop: {}, youtube: {}, rss: [] });
+}
+
+async function loadState() {
+  return loadJson(STATE_FILE, { completedOnce: {} });
+}
+
+async function saveState(state) {
+  await saveJson(STATE_FILE, state);
+}
+
+async function loadKnowledge() {
+  return loadJson(KNOWLEDGE_FILE, { generatedAt: new Date().toISOString(), items: [] });
+}
+
+async function saveKnowledge(kb) {
+  kb.generatedAt = new Date().toISOString();
+  await saveJson(KNOWLEDGE_FILE, kb);
+}
+
+/* ------------------ Normalization ------------------ */
+function normalizeCollection(collection) {
+  if (!collection || collection === "0" || /^\d+$/.test(collection)) return "misc";
+  return collection.toLowerCase();
+}
+
+/* ------------------ Fake fetchers (stub) ------------------ */
+// TODO: replace with real Raindrop, YouTube, RSS fetch logic
+async function fetchRaindropItems(collectionId, window) {
+  return [
     {
-      id: "demo1",
-      title: "Demo Ingest Item",
-      url: "https://example.com/demo",
-      sourceType: "demo",
-      publishedAt: new Date().toISOString(),
-    },
-  ];
-
-  await saveJsonCheckpoint(path.join(ingestDir, "items.json"), {
-    items,
-    generatedAt: new Date().toISOString(),
-  });
-
-  console.log("Ingest complete:", { itemCount: items.length, dir: ingestDir });
-}
-
-/* ------------------ Run direct ------------------ */
-if (import.meta.url === `file://${process.argv[1]}`) {
-  ingest().catch((err) => {
-    console.error("Ingest failed", err);
-    process.exitCode = 1;
-  });
-}
+      id: `rd-${collectionId}-${Date.now()}`,
+      title: "Demo Raindrop Bookmark",
+      url: "https://example.com/bookmark",
+      sourceType: "raindrop",
+      co
