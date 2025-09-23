@@ -2,22 +2,43 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listDirectories, loadJson, ensureDir } from "./lib/utils.js";
 
+/* ------------------ Local utilities ------------------ */
+async function ensureDir(dirPath) {
+  await fs.mkdir(dirPath, { recursive: true });
+}
+async function loadJson(filePath, fallback) {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+async function listDirectories(parent) {
+  try {
+    const entries = await fs.readdir(parent, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+function log(message, context = {}) {
+  const ts = new Date().toISOString();
+  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
+  console.log(`[${ts}] ${message}${payload}`);
+}
 
+/* ------------------ Paths & Config ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 const OUTPUT_ROOT = path.join(ROOT_DIR, "data", "publish");
+
 const KNOWLEDGEBASE_REPO = process.env.KNOWLEDGEBASE_REPO ?? "VibesTribe/knowledgebase";
 const KNOWLEDGEBASE_TOKEN = process.env.KNOWLEDGEBASE_TOKEN;
 
-function log(message, context = {}) {
-  const timestamp = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
-  console.log(`[${timestamp}] ${message}${payload}`);
-}
-
+/* ------------------ Main publish step ------------------ */
 export async function publish() {
   const curatedRun = await getLatestRun(CURATED_ROOT);
   if (!curatedRun) {
@@ -48,7 +69,7 @@ export async function publish() {
     knowledge: path.relative(ROOT_DIR, knowledgePath),
     graph: path.relative(ROOT_DIR, graphPath),
     status: path.relative(ROOT_DIR, statusPath),
-    itemCount: knowledgeJson.items.length
+    itemCount: knowledgeJson.items.length,
   });
 
   if (!KNOWLEDGEBASE_TOKEN) {
@@ -59,10 +80,11 @@ export async function publish() {
   await pushToKnowledgebase([
     { filename: "knowledge.json", content: knowledgeJson },
     { filename: "knowledge.graph.json", content: graphJson },
-    { filename: "system-status.json", content: systemStatus }
+    { filename: "system-status.json", content: systemStatus },
   ]);
 }
 
+/* ------------------ Builders ------------------ */
 function buildKnowledgeJson(curated) {
   const items = (curated.items ?? []).map((item) => ({
     id: item.canonicalId ?? item.id,
@@ -75,13 +97,9 @@ function buildKnowledgeJson(curated) {
     thumbnail: item.thumbnail ?? null,
     tags: item.tags ?? [],
     projects: item.projects,
-    assignedProjects: item.assignedProjects
+    assignedProjects: item.assignedProjects,
   }));
-
-  return {
-    generatedAt: curated.generatedAt,
-    items
-  };
+  return { generatedAt: curated.generatedAt, items };
 }
 
 function buildGraphJson(curated) {
@@ -90,11 +108,8 @@ function buildGraphJson(curated) {
 
   const addNode = (id, node) => {
     if (!id) return;
-    if (!nodes.has(id)) {
-      nodes.set(id, { id, ...node });
-    }
+    if (!nodes.has(id)) nodes.set(id, { id, ...node });
   };
-
   const addEdge = (source, target, edge) => {
     if (!source || !target) return;
     edges.push({ source, target, ...edge });
@@ -108,7 +123,7 @@ function buildGraphJson(curated) {
       url: item.url ?? null,
       sourceType: item.sourceType,
       thumbnail: item.thumbnail ?? null,
-      publishedAt: item.publishedAt ?? null
+      publishedAt: item.publishedAt ?? null,
     });
 
     for (const assignment of item.projects ?? []) {
@@ -116,48 +131,39 @@ function buildGraphJson(curated) {
       addNode(projectId, {
         type: "project",
         label: assignment.project,
-        usefulness: assignment.usefulness
+        usefulness: assignment.usefulness,
       });
       addEdge(itemId, projectId, {
         type: "relevant_to",
         usefulness: assignment.usefulness,
-        reason: assignment.reason
+        reason: assignment.reason,
       });
     }
 
     for (const tag of item.tags ?? []) {
       const tagId = `tag:${tag.toLowerCase()}`;
-      addNode(tagId, {
-        type: "tag",
-        label: tag
-      });
-      addEdge(itemId, tagId, {
-        type: "tagged_with"
-      });
+      addNode(tagId, { type: "tag", label: tag });
+      addEdge(itemId, tagId, { type: "tagged_with" });
     }
   }
 
-  return {
-    generatedAt: curated.generatedAt,
-    nodes: Array.from(nodes.values()),
-    edges
-  };
+  return { generatedAt: curated.generatedAt, nodes: Array.from(nodes.values()), edges };
 }
 
+/* ------------------ GitHub push ------------------ */
 async function pushToKnowledgebase(files) {
   for (const { filename, content } of files) {
     const apiUrl = `https://api.github.com/repos/${KNOWLEDGEBASE_REPO}/contents/${filename}`;
     await commitFile(apiUrl, content, filename);
   }
 }
-
 async function commitFile(apiUrl, jsonContent, filename) {
   const existing = await fetch(apiUrl, {
     headers: {
       Authorization: `Bearer ${KNOWLEDGEBASE_TOKEN}`,
       Accept: "application/vnd.github+json",
-      "User-Agent": "kb-orchestration"
-    }
+      "User-Agent": "kb-orchestration",
+    },
   });
 
   let sha = null;
@@ -166,7 +172,7 @@ async function commitFile(apiUrl, jsonContent, filename) {
     sha = existingJson.sha;
   } else if (existing.status !== 404) {
     const text = await existing.text();
-    throw new Error(`Failed to load ${filename} from knowledgebase repo: ${existing.status} ${text}`);
+    throw new Error(`Failed to load ${filename}: ${existing.status} ${text}`);
   }
 
   const response = await fetch(apiUrl, {
@@ -174,46 +180,50 @@ async function commitFile(apiUrl, jsonContent, filename) {
     headers: {
       Authorization: `Bearer ${KNOWLEDGEBASE_TOKEN}`,
       Accept: "application/vnd.github+json",
-      "User-Agent": "kb-orchestration"
+      "User-Agent": "kb-orchestration",
     },
     body: JSON.stringify({
       message: `chore: update ${filename}`,
       content: Buffer.from(JSON.stringify(jsonContent, null, 2)).toString("base64"),
-      sha
-    })
+      sha,
+    }),
   });
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Failed to push ${filename}: ${response.status} ${text}`);
   }
-
   return response.json();
 }
 
+/* ------------------ Helpers ------------------ */
 async function getLatestRun(root) {
   const dayDirs = await listDirectories(root);
   if (!dayDirs.length) return null;
   dayDirs.sort().reverse();
-
   for (const dayDir of dayDirs) {
-    const dayPath = path.join(root, dayDir);
-    const stampDirs = await listDirectories(dayPath);
+    const stampDirs = await listDirectories(path.join(root, dayDir));
     stampDirs.sort().reverse();
     for (const stampDir of stampDirs) {
-      const itemsPath = path.join(dayPath, stampDir, "items.json");
+      const itemsPath = path.join(root, dayDir, stampDir, "items.json");
       const content = await loadJson(itemsPath, null);
-      if (content) {
-        return { dayDir, stampDir, itemsPath, content };
-      }
+      if (content) return { dayDir, stampDir, content };
     }
   }
   return null;
 }
 
+async function buildSystemStatus() {
+  return {
+    generatedAt: new Date().toISOString(),
+    status: "ok",
+  };
+}
+
+/* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  publish().catch((error) => {
-    console.error("Publish step failed", error);
+  publish().catch((err) => {
+    console.error("Publish step failed", err);
     process.exitCode = 1;
   });
 }
