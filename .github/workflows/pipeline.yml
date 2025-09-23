@@ -11,6 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,14 +23,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 🔄 Refresh Raindrop token first
+      - name: Refresh Raindrop token
+        env:
+          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
+          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
+          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
+          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
+          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+        run: node scripts/raindrop-refresh.js
+
       - name: Execute pipeline
         env:
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+          KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
         run: npm run pipeline
 
       - name: Upload logs
@@ -46,4 +60,15 @@ jobs:
         with:
           name: summaries-cache
           path: data/cache/summaries.json
+          if-no-files-found: ignore
+
+      # Optional: keep a snapshot of knowledge files for debugging
+      - name: Upload knowledge snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-snapshot
+          path: |
+            ../knowledgebase/knowledge.json
+            ../knowledgebase/knowledge.graph.json
           if-no-files-found: ignore
