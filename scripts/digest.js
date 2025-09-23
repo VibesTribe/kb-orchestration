@@ -2,7 +2,13 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { saveJsonCheckpoint, saveTextCheckpoint, ensureDir, loadJson, listDirectories } from "./utils.js";
+import {
+  saveJsonCheckpoint,
+  saveTextCheckpoint,
+  ensureDir,
+  loadJson,
+  listDirectories
+} from "./utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -36,23 +42,21 @@ export async function digest() {
 
   const jsonPath = path.join(digestDir, "digest.json");
   const textPath = path.join(digestDir, "digest.txt");
+  const htmlPath = path.join(digestDir, "digest.html");
 
-  // Load previous checkpoint if it exists
-  const digestPayload = (await loadJson(jsonPath, null)) || {
-    generatedAt: new Date().toISOString(),
-    subject: "",
-    totalHigh: 0,
-    totalModerate: 0,
-    projects: []
-  };
+  const digestPayload =
+    (await loadJson(jsonPath, null)) || {
+      generatedAt: new Date().toISOString(),
+      subject: "",
+      totalHigh: 0,
+      totalModerate: 0,
+      projects: []
+    };
 
-  // Process projects incrementally
   for (const [projectKey, project] of projectMap.entries()) {
-    // Skip if already processed this project in checkpoint
     if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
     const { high, moderate } = collectItemsForProject(curatedRun.content, project);
-
     if (!high.length && !moderate.length) continue;
 
     const projectDigest = {
@@ -70,16 +74,17 @@ export async function digest() {
 
     digestPayload.subject = `Knowledgebase Digest – ${digestPayload.totalHigh} High / ${digestPayload.totalModerate} Moderate items`;
 
-    // Save checkpoint after each project
     await saveJsonCheckpoint(jsonPath, digestPayload);
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+    await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
 
     log("Checkpoint saved", { project: project.name });
   }
 
   log("Digest artifacts prepared", {
     json: path.relative(ROOT_DIR, jsonPath),
-    text: path.relative(ROOT_DIR, textPath)
+    text: path.relative(ROOT_DIR, textPath),
+    html: path.relative(ROOT_DIR, htmlPath)
   });
 
   if (!BREVO_API_KEY) {
@@ -101,6 +106,7 @@ export async function digest() {
   await sendBrevoEmail({
     subject: digestPayload.subject,
     textContent: renderTextDigest(digestPayload),
+    htmlContent: renderHtmlDigest(digestPayload),
     recipients
   });
 }
@@ -152,13 +158,13 @@ function renderTextDigest(payload) {
     lines.push("");
 
     if (project.high.length) {
-      lines.push("## High Priority");
+      lines.push("## High Usefulness");
       for (const entry of project.high) lines.push(formatEntry(entry));
       lines.push("");
     }
 
     if (project.moderate.length) {
-      lines.push("## Moderate Priority");
+      lines.push("## Moderate Usefulness");
       for (const entry of project.moderate) lines.push(formatEntry(entry));
       lines.push("");
     }
@@ -184,7 +190,70 @@ function formatEntry(entry) {
   return lines.join("\n");
 }
 
-async function sendBrevoEmail({ subject, textContent, recipients }) {
+function renderHtmlDigest(payload) {
+  const date = new Date(payload.generatedAt).toLocaleString("en-US", {
+    timeZone: "America/Toronto",
+    dateStyle: "long",
+    timeStyle: "short"
+  });
+
+  const projectSections = payload.projects
+    .map(
+      (project) => `
+        <h2 style="font-size:18px; font-weight:400; text-decoration:underline; margin:20px 0 12px; color:#111827; font-family: 'Open Sans', Verdana, sans-serif;">${project.name}</h2>
+        ${project.high
+          .map(
+            (entry) => `
+            <div style="background:#f9fdfb; border-radius:8px; padding:12px; margin-bottom:16px;">
+              <h3 style="font-size:16px; font-weight:500; color:#065f46; margin:0 0 8px; font-family: 'Open Sans', Verdana, sans-serif;">High Usefulness</h3>
+              <p style="margin:4px 0; font-size:15px; font-weight:500; font-family: 'Open Sans', Verdana, sans-serif;">${entry.title}</p>
+              <p style="font-size:14px; color:#374151; margin:4px 0; line-height:1.5;">${entry.summary}</p>
+              <p style="font-size:14px; color:#065f46; margin:4px 0; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>
+              ${entry.url ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>` : ""}
+            </div>`
+          )
+          .join("")}
+        ${project.moderate
+          .map(
+            (entry) => `
+            <div style="background:#fbfaff; border-radius:8px; padding:12px; margin-bottom:16px;">
+              <h3 style="font-size:16px; font-weight:500; color:#5b21b6; margin:0 0 8px; font-family: 'Open Sans', Verdana, sans-serif;">Moderate Usefulness</h3>
+              <p style="margin:4px 0; font-size:15px; font-weight:500; font-family: 'Open Sans', Verdana, sans-serif;">${entry.title}</p>
+              <p style="font-size:14px; color:#374151; margin:4px 0; line-height:1.5;">${entry.summary}</p>
+              <p style="font-size:14px; color:#5b21b6; margin:4px 0; line-height:1.5;"><em>Why it matters:</em> ${entry.reason}</p>
+              ${entry.url ? `<a href="${entry.url}" style="color:#2563eb; font-size:14px;">Go to source</a>` : ""}
+            </div>`
+          )
+          .join("")}
+        <hr style="border:none; border-top:1px solid #e5e7eb; margin:20px 0;" />
+      `
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body style="font-family: 'Inter','Helvetica Neue',Arial,sans-serif; background:#f9fafb; margin:0; padding:0;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="padding:20px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border-radius:12px; padding:24px; text-align:left;">
+            <tr><td>
+              <h1 style="color:#111827; font-size:20px; font-weight:400; margin:0 0 12px; font-family: 'Open Sans', Verdana, sans-serif;">Daily Digest</h1>
+              <p style="color:#6b7280; font-size:14px; margin:0 0 24px;">Generated at: ${date}</p>
+              ${projectSections}
+              <p style="text-align:center; margin:0; font-size:14px; color:#374151;">
+                You can still browse all recent updates, even those not flagged as useful:<br/>
+                <a href="https://your-kb-site.com/digests/" style="color:#2563eb;">View digests on KB-site</a>
+              </p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+  </html>`;
+}
+
+async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
   try {
     const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
@@ -196,7 +265,8 @@ async function sendBrevoEmail({ subject, textContent, recipients }) {
         sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
         to: recipients.map((email) => ({ email })),
         subject,
-        textContent
+        textContent,
+        htmlContent
       })
     });
     if (!response.ok) throw new Error(`Brevo error: ${response.status} ${await response.text()}`);
@@ -251,7 +321,7 @@ async function loadChangelog(pathname) {
   try {
     const text = await fs.readFile(pathname, "utf8");
     return text
-      .split(/\r?\n/)
+      .split(/\\r?\\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
   } catch {
