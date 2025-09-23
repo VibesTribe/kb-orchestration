@@ -1,18 +1,42 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 
-export function log(message, context = {}) {
-  const timestamp = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
-  console.log(`[${timestamp}] ${message}${payload}`);
-}
-
+/**
+ * Ensure a directory exists (recursively).
+ */
 export async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
-export async function loadJson(filePath, fallback = null) {
+/**
+ * Save JSON to a file (checkpoint style).
+ */
+export async function saveJsonCheckpoint(filePath, data) {
+  await ensureDir(path.dirname(filePath));
+  const json = JSON.stringify(data, null, 2);
+  await fs.writeFile(filePath, json, "utf8");
+}
+
+/**
+ * Save plain text to a file (checkpoint style).
+ */
+export async function saveTextCheckpoint(filePath, text) {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, text, "utf8");
+}
+
+/**
+ * Save HTML to a file (checkpoint style).
+ */
+export async function saveHtmlCheckpoint(filePath, html) {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, html, "utf8");
+}
+
+/**
+ * Load a JSON file if it exists, otherwise return fallback.
+ */
+export async function loadJson(filePath, fallback) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
     return JSON.parse(raw);
@@ -21,11 +45,9 @@ export async function loadJson(filePath, fallback = null) {
   }
 }
 
-export async function saveJson(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-
+/**
+ * List immediate subdirectories of a parent directory.
+ */
 export async function listDirectories(parent) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
@@ -33,16 +55,4 @@ export async function listDirectories(parent) {
   } catch {
     return [];
   }
-}
-
-export function hash(value) {
-  return crypto.createHash("sha256").update(String(value)).digest("hex");
-}
-
-export function truncate(text, limit) {
-  if (!text) return "";
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length <= limit
-    ? normalized
-    : `${normalized.slice(0, limit - 3)}...`;
 }
