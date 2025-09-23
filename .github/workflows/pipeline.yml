@@ -74,6 +74,22 @@ jobs:
           path: data/cache/pipeline-state.json
           if-no-files-found: ignore
 
+      - name: Upload system status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-status
+          path: data/cache/system-status.json
+          if-no-files-found: ignore
+
+      - name: Upload curated data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curated-data
+          path: data/curated/
+          if-no-files-found: ignore
+
   retry-if-failed:
     needs: run-pipeline
     if: failure()
@@ -114,7 +130,7 @@ jobs:
           KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
         run: npm run pipeline
 
-      # ✅ Upload artifacts again (latest state wins)
+      # ✅ Upload artifacts (retry overwrites)
       - name: Upload logs (retry)
         if: always()
         uses: actions/upload-artifact@v4
@@ -137,4 +153,20 @@ jobs:
         with:
           name: pipeline-state
           path: data/cache/pipeline-state.json
+          if-no-files-found: ignore
+
+      - name: Upload system status (retry)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-status
+          path: data/cache/system-status.json
+          if-no-files-found: ignore
+
+      - name: Upload curated data (retry)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curated-data
+          path: data/curated/
           if-no-files-found: ignore
