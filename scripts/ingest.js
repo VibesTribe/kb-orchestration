@@ -1,15 +1,17 @@
 // scripts/ingest.js
-// Reads config/sources.json and writes ingest checkpoints under data/ingest/
+// Ingest real data from Raindrop + YouTube, guided by config/sources.json
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Go up ONE level to repo root (scripts -> repoRoot)
-const ROOT_DIR = path.resolve(__dirname, "..");
+const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const CONFIG_FILE = path.join(ROOT_DIR, "config", "sources.json");
 const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
+
+const raindropToken = process.env.RAINDROP_TOKEN;
+const youtubeKey = process.env.YOUTUBE_API_KEY;
 
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
@@ -17,82 +19,99 @@ async function ensureDir(dirPath) {
 
 async function saveJson(filePath, data) {
   await ensureDir(path.dirname(filePath));
-  const json = JSON.stringify(data, null, 2);
-  await fs.writeFile(filePath, json, "utf8");
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+async function ingestRaindrop(collections) {
+  if (!raindropToken) {
+    console.warn("No RAINDROP_TOKEN; skipping Raindrop");
+    return [];
+  }
+  const results = [];
+  for (const c of collections) {
+    const url = `https://api.raindrop.io/rest/v1/raindrop/${c.id}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${raindropToken}` },
+    });
+    if (!res.ok) {
+      console.warn(`Raindrop fetch failed for ${c.id}: ${res.status}`);
+      continue;
+    }
+    const json = await res.json();
+    if (json?.item) {
+      results.push({
+        id: `raindrop-${c.id}`,
+        title: json.item.title,
+        url: json.item.link,
+        sourceType: "raindrop",
+        mode: c.mode,
+        collectedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return results;
+}
+
+async function ingestYouTube(playlists) {
+  if (!youtubeKey) {
+    console.warn("No YOUTUBE_API_KEY; skipping YouTube");
+    return [];
+  }
+  const results = [];
+  for (const p of playlists) {
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=5&playlistId=${p.id}&key=${youtubeKey}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`YouTube fetch failed for ${p.id}: ${res.status}`);
+      continue;
+    }
+    const json = await res.json();
+    for (const item of json.items || []) {
+      results.push({
+        id: `yt-${item.id}`,
+        title: item.snippet.title,
+        url: `https://www.youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
+        sourceType: "youtube-playlist",
+        mode: p.mode,
+        collectedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return results;
 }
 
 export async function ingest() {
   let sources;
   try {
-    const raw = await fs.readFile(CONFIG_FILE, "utf8");
-    sources = JSON.parse(raw);
+    sources = JSON.parse(await fs.readFile(CONFIG_FILE, "utf8"));
   } catch {
     console.warn("No valid config/sources.json found; skipping ingest");
     return [];
   }
 
-  const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, "-");
-  const dayDir = now.toISOString().split("T")[0];
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dayDir = new Date().toISOString().split("T")[0];
   const ingestDir = path.join(INGEST_ROOT, dayDir, timestamp);
   await ensureDir(ingestDir);
 
-  const items = [];
-
+  let items = [];
   if (sources.raindrop?.collections?.length) {
-    for (const c of sources.raindrop.collections) {
-      items.push({
-        id: `raindrop-${c.id}`,
-        title: `Raindrop collection ${c.name}`,
-        sourceType: "raindrop",
-        mode: c.mode,
-        collectedAt: now.toISOString(),
-      });
-    }
+    items = items.concat(await ingestRaindrop(sources.raindrop.collections));
   }
-
   if (sources.youtube?.playlists?.length) {
-    for (const p of sources.youtube.playlists) {
-      items.push({
-        id: `yt-pl-${p.id}`,
-        title: `YouTube playlist ${p.id}`,
-        sourceType: "youtube-playlist",
-        mode: p.mode,
-        collectedAt: now.toISOString(),
-      });
-    }
-  }
-
-  if (sources.youtube?.channels?.length) {
-    for (const ch of sources.youtube.channels) {
-      items.push({
-        id: `yt-ch-${ch.handle}`,
-        title: `YouTube channel @${ch.handle}`,
-        sourceType: "youtube-channel",
-        mode: ch.mode,
-        collectedAt: now.toISOString(),
-      });
-    }
-  }
-
-  if (Array.isArray(sources.rss)) {
-    for (const r of sources.rss) {
-      items.push({
-        id: `rss-${r.id}`,
-        title: `RSS ${r.id}`,
-        sourceType: "rss",
-        mode: r.mode ?? "once",
-        collectedAt: now.toISOString(),
-      });
-    }
+    items = items.concat(await ingestYouTube(sources.youtube.playlists));
   }
 
   await saveJson(path.join(ingestDir, "items.json"), {
     items,
-    generatedAt: now.toISOString(),
+    generatedAt: new Date().toISOString(),
   });
 
-  console.log("Ingest complete:", { itemCount: items.length, dir: ingestDir });
+  console.log("Ingest complete:", {
+    itemCount: items.length,
+    dir: ingestDir,
+  });
+
   return items;
 }
 
