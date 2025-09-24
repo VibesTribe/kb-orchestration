@@ -1,70 +1,83 @@
-// scripts/lib/openrouter.js
-import fetch from "node-fetch";
-import { loadJson } from "./utils.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "../..");
+const MODELS_PATH = path.join(ROOT_DIR, "config", "models.json");
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
 if (!OPENROUTER_API_KEY) {
-  console.warn("Warning: OPENROUTER_API_KEY not set!");
+  throw new Error("OPENROUTER_API_KEY is required");
+}
+
+let models = [];
+let currentIndex = 0;
+
+async function loadModels() {
+  if (models.length) return models;
+  try {
+    const text = await fs.readFile(MODELS_PATH, "utf8");
+    const json = JSON.parse(text);
+    if (!json.models || !Array.isArray(json.models)) {
+      throw new Error("config/models.json must have a 'models' array");
+    }
+    models = json.models;
+    return models;
+  } catch (err) {
+    console.error("Failed to load models.json", err);
+    throw err;
+  }
 }
 
 /**
- * Try to call OpenRouter with a given model and prompt
- * Returns { text, model } or throws error.
+ * Call OpenRouter with auto-rotation through configured models.
+ * @param {string} prompt
+ * @param {string} purpose - "enrich" | "classify"
+ * @returns {Promise<{text: string, model: string}>}
  */
-export async function callOpenRouterModel(model, prompt, options = {}) {
-  const body = {
-    model,
-    prompt,
-    // ... other options or settings
-  };
-
-  const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      // Add any required headers (e.g. OpenRouter’s policy headers)
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`OpenRouter ${model} failed: ${resp.status} ${txt}`);
+export async function callWithRotation(prompt, purpose = "enrich") {
+  const modelList = await loadModels();
+  if (!modelList.length) {
+    throw new Error("No models available in config/models.json");
   }
 
-  const j = await resp.json();
-  const resultText = j.choices?.[0]?.message?.content;
-  if (typeof resultText !== "string") {
-    throw new Error(`OpenRouter ${model} returned no content`);
-  }
+  let attempts = 0;
+  const maxAttempts = modelList.length * 2; // try at least twice through all models
 
-  return { text: resultText, model };
-}
+  while (attempts < maxAttempts) {
+    const model = modelList[currentIndex];
+    currentIndex = (currentIndex + 1) % modelList.length;
 
-/**
- * Rotate through configured models until one succeeds.
- * Reads model list from config/models.json under key "models".
- */
-export async function callOpenRouter(prompt, options = {}) {
-  const cfg = await loadJson("config/models.json", null);
-  const models = (cfg && Array.isArray(cfg.models)) ? cfg.models : [];
-  if (!models.length) {
-    throw new Error("No models configured in config/models.json");
-  }
-
-  let lastError = null;
-  for (const m of models) {
     try {
-      const res = await callOpenRouterModel(m, prompt, options);
-      return res;
+      const result = await callOpenRouter(model, prompt);
+      return { text: result, model };
     } catch (err) {
-      lastError = err;
-      console.warn(`Model ${m} failed: ${err.message}`);
-      continue;
+      console.warn(`[openrouter] ${purpose} failed with ${model}: ${err.message}`);
+      attempts++;
     }
   }
-  // All models failed
-  throw lastError;
+
+  throw new Error(`All models failed for ${purpose} after ${maxAttempts} attempts`);
+}
+
+async function callOpenRouter(model, prompt) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
