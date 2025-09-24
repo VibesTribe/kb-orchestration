@@ -1,77 +1,64 @@
 // scripts/publish.js
-// Prepare site artifacts and push upstream so kb-site stays current.
+// Handles local publish artifacts and delegates upstream sync to kb-sync.js
 
-import fs from "node:fs/promises";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { pushUpdate } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DATA = path.join(ROOT, "data");
-const CACHE = path.join(DATA, "cache");
 const PUBLISH_ROOT = path.join(DATA, "publish");
-const CURATED = path.join(DATA, "curated");
-const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
-const STATS_FILE = path.join(CACHE, "publish-stats.json");
 
-function log(m, c = {}) {
-  console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length ? c : "");
-}
-async function ensureDir(p) { await fs.mkdir(p, { recursive: true }); }
-async function loadJson(p, fb) { try { return JSON.parse(await fs.readFile(p, "utf8")); } catch { return fb; } }
-async function saveJson(p, v) { await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v, null, 2), "utf8"); }
-
-function nowStamp() { return Date.now().toString(); }
-function dayDir() { return new Date().toISOString().slice(0, 10); }
-
-async function latestCuratedRun() {
-  const days = await fs.readdir(CURATED).catch(() => []);
-  days.sort().reverse();
-  for (const d of days) {
-    const dPath = path.join(CURATED, d);
-    const stamps = await fs.readdir(dPath).catch(() => []);
-    stamps.sort().reverse();
-    for (const s of stamps) {
-      const f = path.join(dPath, s, "items.json");
-      const json = await loadJson(f, null);
-      if (json) return { dayDir: d, stampDir: s, path: f, content: json };
-    }
-  }
-  return null;
+/**
+ * Save a JSON object to a file
+ */
+async function saveJson(filePath, obj) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(obj, null, 2), "utf8");
 }
 
+/**
+ * Copy file into publish dir with timestamped folder
+ */
+async function copyToPublish(localPath, subdir = "") {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const outDir = path.join(PUBLISH_ROOT, new Date().toISOString().slice(0, 10), stamp, subdir);
+  await fs.mkdir(outDir, { recursive: true });
+  const fileName = path.basename(localPath);
+  const outPath = path.join(outDir, fileName);
+  await fs.copyFile(localPath, outPath);
+  console.log(`📂 Published ${localPath} → ${outPath}`);
+  return outPath;
+}
+
+/**
+ * Main publish routine
+ * - Copies knowledge.json
+ * - Copies curated/latest if present
+ * - Leaves upstream sync to run-pipeline.js (via kb-sync.js)
+ */
 export async function publish() {
-  const dir = path.join(PUBLISH_ROOT, dayDir(), nowStamp());
-  await ensureDir(dir);
+  console.log("📤 Starting publish step...");
 
-  // always copy latest knowledge.json so the site can read it
-  let kb = { items: [] };
+  // 1. Copy knowledge.json
+  const knowledgeFile = path.join(DATA, "knowledge.json");
   try {
-    kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
-    await saveJson(path.join(dir, "knowledge.json"), kb);
-  } catch { /* ignore */ }
-
-  // also ship the latest curated run for the site
-  const run = await latestCuratedRun();
-  if (run) {
-    await fs.copyFile(run.path, path.join(dir, "curated-items.json"));
+    await copyToPublish(knowledgeFile);
+  } catch {
+    console.warn("⚠️ No knowledge.json found to publish");
   }
 
-  // cheap manifest for the site or debugging
-  await saveJson(path.join(dir, "manifest.json"), {
-    generatedAt: new Date().toISOString(),
-    knowledgeCopied: true,
-    curatedCopied: !!run
-  });
+  // 2. Copy curated/latest if exists
+  const curatedDir = path.join(DATA, "curated", "latest");
+  try {
+    const files = await fs.readdir(curatedDir);
+    for (const f of files) {
+      await copyToPublish(path.join(curatedDir, f), "curated");
+    }
+  } catch {
+    console.log("ℹ️ No curated/latest directory found, skipping");
+  }
 
-  await saveJson(STATS_FILE, { count: 1 });
-  log("Publish artifacts prepared", { dir, items: (run?.content?.items ?? []).length });
-
-  // 🔼 Push upstream so kb-site GitHub Pages can serve the newest knowledge
-  await pushUpdate(kb, "Publish step update");
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  publish().catch((e) => { console.error("Publish failed", e); process.exitCode = 1; });
+  console.log("✅ Publish step complete (local artifacts only).");
 }
