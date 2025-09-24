@@ -1,16 +1,21 @@
 // scripts/lib/github-secrets.js
 // Update GitHub repo secrets directly using Actions token
-// No sodium / encryption needed since we use fine-grained PAT with repo scope.
+// No sodium/encryption needed since we use PAT with repo scope.
 
 const owner = process.env.GITHUB_REPOSITORY?.split("/")[0];
 const repo = process.env.GITHUB_REPOSITORY?.split("/")[1];
-const githubToken = process.env.GITHUB_TOKEN || process.env.ACTIONS_PAT;
+
+// Try tokens in priority order: ACTIONS_PAT > KNOWLEDGEBASE_TOKEN > GITHUB_TOKEN
+const githubToken =
+  process.env.ACTIONS_PAT ||
+  process.env.KNOWLEDGEBASE_TOKEN ||
+  process.env.GITHUB_TOKEN;
 
 if (!owner || !repo) {
   throw new Error("GITHUB_REPOSITORY env is required (owner/repo)");
 }
 if (!githubToken) {
-  throw new Error("ACTIONS_PAT or GITHUB_TOKEN is required to update secrets");
+  throw new Error("ACTIONS_PAT, KNOWLEDGEBASE_TOKEN, or GITHUB_TOKEN is required to update secrets");
 }
 
 /**
@@ -18,9 +23,7 @@ if (!githubToken) {
  */
 export async function setRepoSecret(name, value) {
   const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/actions/secrets/${encodeURIComponent(
-      name
-    )}`,
+    `https://api.github.com/repos/${owner}/${repo}/actions/secrets/${encodeURIComponent(name)}`,
     {
       method: "PUT",
       headers: {
@@ -30,7 +33,7 @@ export async function setRepoSecret(name, value) {
       },
       body: JSON.stringify({
         encrypted_value: value,
-        key_id: "ignored", // required key but not validated when using PAT
+        key_id: "ignored", // required by API but not validated when using PAT
       }),
     }
   );
