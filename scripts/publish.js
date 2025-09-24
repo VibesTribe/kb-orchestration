@@ -1,111 +1,67 @@
-import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSystemStatus } from "./system-status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const PUBLISH_DIR = path.join(DATA_DIR, "publish");
-const KNOWLEDGE_FILE = path.join(DATA_DIR, "knowledge.json");
+const ROOT = path.resolve(__dirname, "..");
+const DATA = path.join(ROOT, "data");
+const CACHE = path.join(DATA, "cache");
+const PUBLISH_ROOT = path.join(DATA, "publish");
+const CURATED = path.join(DATA, "curated");
+const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
+const STATS_FILE = path.join(CACHE, "publish-stats.json");
 
-const GITHUB_API = "https://api.github.com";
-const OWNER = process.env.GITHUB_REPOSITORY?.split("/")[0];
-const REPO = process.env.GITHUB_REPOSITORY?.split("/")[1];
-const TOKEN = process.env.ACTIONS_PAT;
+function log(m,c={}){ console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length?c:""); }
+async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
+async function loadJson(p, fb){ try { return JSON.parse(await fs.readFile(p,"utf8")); } catch { return fb; } }
+async function saveJson(p, v){ await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v,null,2), "utf8"); }
 
-function log(message, ctx = {}) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] ${message}`, Object.keys(ctx).length ? ctx : "");
-}
+function nowStamp(){ return Date.now().toString(); }
+function dayDir(){ return new Date().toISOString().slice(0,10); }
 
-/* ---------- Helpers ---------- */
-async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
-}
-
-async function loadJson(file, fallback) {
-  try {
-    return JSON.parse(await fs.readFile(file, "utf8"));
-  } catch {
-    return fallback;
+async function latestCuratedRun() {
+  const days = await fs.readdir(CURATED).catch(()=>[]);
+  days.sort().reverse();
+  for (const d of days) {
+    const dPath = path.join(CURATED, d);
+    const stamps = await fs.readdir(dPath).catch(()=>[]);
+    stamps.sort().reverse();
+    for (const s of stamps) {
+      const f = path.join(dPath, s, "items.json");
+      const json = await loadJson(f, null);
+      if (json) return { dayDir: d, stampDir: s, path: f, content: json };
+    }
   }
+  return null;
 }
 
-/* ---------- GitHub Push ---------- */
-async function commitJsonToRepo(filePath, destPath, message) {
-  if (!TOKEN) throw new Error("ACTIONS_PAT is not configured");
-  if (!OWNER || !REPO) throw new Error("GITHUB_REPOSITORY not set");
-
-  const content = await fs.readFile(filePath, "utf8");
-  const base64Content = Buffer.from(content).toString("base64");
-
-  // Does the file already exist?
-  const url = `${GITHUB_API}/repos/${OWNER}/${REPO}/contents/${destPath}`;
-  let sha = null;
-  const getResp = await fetch(url, {
-    headers: { Authorization: `Bearer ${TOKEN}`, "User-Agent": "kb-orchestration" },
-  });
-  if (getResp.ok) {
-    const json = await getResp.json();
-    sha = json.sha;
-  }
-
-  const putResp = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "User-Agent": "kb-orchestration",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      message,
-      content: base64Content,
-      sha,
-      branch: "main",
-    }),
-  });
-
-  if (!putResp.ok) {
-    throw new Error(`Failed to push ${destPath}: ${putResp.status} ${await putResp.text()}`);
-  }
-  log("Committed to repo", { destPath });
-}
-
-/* ---------- Main ---------- */
 export async function publish() {
-  const dayDir = new Date().toISOString().slice(0, 10);
-  const stampDir = Date.now().toString();
-  const publishDir = path.join(PUBLISH_DIR, dayDir, stampDir);
-  await ensureDir(publishDir);
+  const dir = path.join(PUBLISH_ROOT, dayDir(), nowStamp());
+  await ensureDir(dir);
 
-  const knowledge = await loadJson(KNOWLEDGE_FILE, null);
-  if (!knowledge) {
-    log("No knowledge.json found; skipping publish");
-    return;
+  // always copy latest knowledge.json so the site can read it
+  try {
+    const kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
+    await saveJson(path.join(dir, "knowledge.json"), kb);
+  } catch { /* ignore */ }
+
+  // also ship the latest curated run for the site
+  const run = await latestCuratedRun();
+  if (run) {
+    await fs.copyFile(run.path, path.join(dir, "curated-items.json"));
   }
 
-  const localCopy = path.join(publishDir, "knowledge.json");
-  await fs.writeFile(localCopy, JSON.stringify(knowledge, null, 2), "utf8");
+  // cheap manifest for the site or debugging
+  await saveJson(path.join(dir, "manifest.json"), {
+    generatedAt: new Date().toISOString(),
+    knowledgeCopied: true,
+    curatedCopied: !!run
+  });
 
-  // Push to repo
-  await commitJsonToRepo(
-    localCopy,
-    "data/knowledge.json",
-    `Publish knowledge.json ${dayDir} ${stampDir}`
-  );
-
-  // Update system status
-  await buildSystemStatus({ published: knowledge.items?.length || 0 });
-
-  log("Publish complete", { dir: publishDir, items: knowledge.items?.length || 0 });
+  await saveJson(STATS_FILE, { count: 1 });
+  log("Publish artifacts prepared", { dir, items: (run?.content?.items ?? []).length });
 }
 
-/* ---------- Run direct ---------- */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  publish().catch((err) => {
-    console.error("Publish failed", err);
-    process.exitCode = 1;
-  });
+  publish().catch((e)=>{ console.error("Publish failed", e); process.exitCode=1; });
 }
