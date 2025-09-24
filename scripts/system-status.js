@@ -2,91 +2,73 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/* ------------------ Paths ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
-const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
-const STATE_FILE = path.join(CACHE_ROOT, "pipeline-state.json");
-const STATUS_FILE = path.join(CACHE_ROOT, "system-status.json");
-const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
-const DIGEST_ROOT = path.join(ROOT_DIR, "data", "digest");
+const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
+const STATUS_FILE = path.join(CACHE_DIR, "system-status.json");
 
-/* ------------------ Helpers ------------------ */
+/* ---------- Helpers ---------- */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
-async function loadJson(filePath, fallback = null) {
+
+async function loadJson(file, fallback) {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(await fs.readFile(file, "utf8"));
   } catch {
     return fallback;
   }
 }
-async function saveJson(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
+
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-/* ------------------ Builders ------------------ */
-async function getLatestDigest() {
-  const dayDirs = await listDirectories(DIGEST_ROOT);
-  if (!dayDirs.length) return null;
-  dayDirs.sort().reverse();
-
-  for (const dayDir of dayDirs) {
-    const stampDirs = await listDirectories(path.join(DIGEST_ROOT, dayDir));
-    if (!stampDirs.length) continue;
-    stampDirs.sort().reverse();
-    for (const stampDir of stampDirs) {
-      const digestPath = path.join(DIGEST_ROOT, dayDir, stampDir, "digest.json");
-      const digest = await loadJson(digestPath, null);
-      if (digest) return digest;
-    }
-  }
-  return null;
+function log(message, ctx = {}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${message}`, Object.keys(ctx).length ? ctx : "");
 }
 
-/* ------------------ Main ------------------ */
-export async function buildSystemStatus() {
-  const state = await loadJson(STATE_FILE, { completed: [] });
-  const kb = await loadJson(KNOWLEDGE_FILE, null);
-  const digest = await getLatestDigest();
-
-  const status = {
+/* ---------- Main ---------- */
+export async function buildSystemStatus(partialStats = {}) {
+  const prev = await loadJson(STATUS_FILE, {
     generatedAt: new Date().toISOString(),
     pipeline: {
-      lastRunStep: state.completed[state.completed.length - 1] ?? null,
-      completedSteps: state.completed,
-      stats: {
-        ingested: kb?.items?.length ?? 0,
-        enriched: kb?.items?.filter((i) => i.summary && i.description).length ?? 0,
-        classified: kb?.items?.filter((i) => i.assignedProjects).length ?? 0,
-        digests: digest ? 1 : 0,
-        published: 0, // updated only by publish.js if needed
-      },
+      lastRunStep: null,
+      completedSteps: [],
+      stats: { ingested: 0, enriched: 0, classified: 0, digests: 0, published: 0 },
     },
-    knowledgebase: kb,
-    digest,
+    knowledgebase: null,
+    digest: null,
+  });
+
+  const stats = {
+    ...prev.pipeline.stats,
+    ...Object.fromEntries(
+      Object.entries(partialStats).map(([k, v]) => [k, (prev.pipeline.stats[k] ?? 0) + v])
+    ),
   };
 
-  await saveJson(STATUS_FILE, status);
-  console.log("✅ System status written", STATUS_FILE, status);
-  return status;
+  const updated = {
+    ...prev,
+    generatedAt: new Date().toISOString(),
+    pipeline: {
+      ...prev.pipeline,
+      lastRunStep: partialStats.lastRunStep ?? prev.pipeline.lastRunStep,
+      completedSteps: Array.from(
+        new Set([...prev.pipeline.completedSteps, ...(partialStats.completedSteps ?? [])])
+      ),
+      stats,
+    },
+  };
+
+  await saveJson(STATUS_FILE, updated);
+  log("✅ System status written", { file: path.relative(ROOT_DIR, STATUS_FILE), stats });
+  return updated;
 }
 
-/* ------------------ Run direct ------------------ */
+/* ---------- Run direct ---------- */
 if (import.meta.url === `file://${process.argv[1]}`) {
   buildSystemStatus().catch((err) => {
-    console.error("System status build failed", err);
-    process.exitCode = 1;
-  });
-}
+    console.
