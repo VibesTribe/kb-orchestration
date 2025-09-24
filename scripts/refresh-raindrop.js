@@ -1,45 +1,77 @@
 // scripts/refresh-raindrop.js
-// Refresh Raindrop OAuth token and update GitHub secret RAINDROP_TOKEN
+// Refresh Raindrop tokens and write BOTH access + refresh tokens back to repo secrets.
+// Non-blocking by default: exit code 0 even on failure (workflow uses "|| true").
 
-import { setRepoSecret } from "./lib/github-secrets.js";
+import fetch from "node-fetch";
+import { updateRepoSecrets } from "./lib/github-secrets.js";
 
-const clientId = process.env.RAINDROP_CLIENT_ID;
-const clientSecret = process.env.RAINDROP_CLIENT_SECRET;
-const refreshToken = process.env.RAINDROP_REFRESH_TOKEN;
+const RAINDROP_CLIENT_ID = process.env.RAINDROP_CLIENT_ID;
+const RAINDROP_CLIENT_SECRET = process.env.RAINDROP_CLIENT_SECRET;
+const RAINDROP_REFRESH_TOKEN = process.env.RAINDROP_REFRESH_TOKEN;
 
-if (!clientId || !clientSecret || !refreshToken) {
-  console.warn("Missing Raindrop refresh credentials; skipping refresh");
-  process.exit(0);
+// Raindrop OAuth refresh endpoint (note: NOT /v1/...)
+// Docs use /oauth/access_token
+const RAINDROP_TOKEN_URL = "https://raindrop.io/oauth/access_token";
+
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  const extra = Object.keys(ctx).length ? ` ${JSON.stringify(ctx)}` : "";
+  console.log(`[${ts}] ${msg}${extra}`);
 }
 
 async function refresh() {
-  const res = await fetch("https://api.raindrop.io/v1/oauth/token", {
+  if (!RAINDROP_CLIENT_ID || !RAINDROP_CLIENT_SECRET || !RAINDROP_REFRESH_TOKEN) {
+    log("Skipping refresh: missing raindrop OAuth envs");
+    return { skipped: true };
+  }
+
+  // Request a new access token (and possibly a new refresh token)
+  const resp = await fetch(RAINDROP_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       grant_type: "refresh_token",
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
+      refresh_token: RAINDROP_REFRESH_TOKEN,
+      client_id: RAINDROP_CLIENT_ID,
+      client_secret: RAINDROP_CLIENT_SECRET,
     }),
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Raindrop token refresh failed: ${res.status} ${text}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Raindrop refresh failed: ${resp.status} ${text}`);
   }
 
-  const json = await res.json();
-  const newToken = json.access_token;
-  if (!newToken) {
-    throw new Error("Raindrop response missing access_token");
-  }
+  const json = await resp.json();
+  // Expected fields: access_token, token_type, expires_in, refresh_token?
+  const access = json.access_token;
+  const newRefresh = json.refresh_token || null;
 
-  await setRepoSecret("RAINDROP_TOKEN", newToken);
-  console.log("✅ Raindrop token refreshed and stored");
+  if (!access) throw new Error("No access_token in refresh response");
+
+  // Update repo secrets. We write both:
+  // - RAINDROP_TOKEN          (access token)
+  // - RAINDROP_REFRESH_TOKEN  (rotate if provided)
+  const secrets = { RAINDROP_TOKEN: access };
+  if (newRefresh) secrets.RAINDROP_REFRESH_TOKEN = newRefresh;
+
+  const results = await updateRepoSecrets(secrets);
+  log("Raindrop secrets update results", results);
+  return { ok: true, rotated: Boolean(newRefresh) };
 }
 
-refresh().catch((err) => {
-  console.error("Raindrop refresh failed", err);
-  process.exitCode = 0; // keep pipeline alive
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  refresh()
+    .then((r) => {
+      log("Refresh finished", r || {});
+      // Non-blocking: always succeed
+      process.exitCode = 0;
+    })
+    .catch((e) => {
+      log("Refresh error", { error: e.message });
+      // Non-blocking: always succeed
+      process.exitCode = 0;
+    });
+}
+
+export { refresh };
