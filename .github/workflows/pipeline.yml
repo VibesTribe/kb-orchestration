@@ -1,61 +1,39 @@
-name: run-pipeline
+# .github/workflows/pipeline.yml
+name: pipeline
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *" # daily at 01:00 UTC
+    - cron: "0 6 * * *" # daily 6am UTC
 
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "npm"
 
-      - name: Clean and Install dependencies (no cache)
+      - name: Install dependencies
         run: |
           rm -rf node_modules package-lock.json ~/.npm
-          npm config set registry https://registry.npmjs.org/
-          npm install --no-audit --no-fund
+          npm install
 
-      - name: Refresh Raindrop token (optional)
+      - name: Refresh Raindrop token (non-blocking)
+        run: node scripts/refresh-raindrop.js || true
         env:
-          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-        run: node scripts/refresh-raindrop.js || true
 
       - name: Run pipeline
-        env:
-          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
-          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
-          BREVO_TO: ${{ secrets.BREVO_TO }}
         run: node scripts/run-pipeline.js
-
-      - name: Upload artifacts (status + curated + digest + publish)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kb-output
-          path: |
-            data/cache/**
-            data/curated/**
-            data/digest/**
-            data/publish/**
-            data/knowledge.json
-          if-no-files-found: ignore
+        env:
+          # 🔑 Core secrets
+          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
