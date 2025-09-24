@@ -2,6 +2,7 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { callOpenRouter } from "./openrouter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -32,12 +33,27 @@ function log(msg, ctx = {}) {
   console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
 }
 
-/* ------------------ Enrichment stub ------------------ */
-// TODO: Replace this with real LLM enrichment (OpenRouter API etc.)
+/* ------------------ Enrichment with OpenRouter ------------------ */
 async function generateSummary(item) {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are a precise research summarizer. Write a short summary and a 2–3 sentence description of the provided resource."
+    },
+    {
+      role: "user",
+      content: `Title: ${item.title ?? "(untitled)"}\nURL: ${item.url ?? "unknown"}`
+    }
+  ];
+
+  const { content } = await callOpenRouter(messages, { maxTokens: 250, temperature: 0.2 });
+
+  // Split: first sentence = summary, rest = description
+  const [first, ...rest] = content.split(/(?<=\.)\s+/);
   return {
-    summary: `This is a placeholder summary for "${item.title}".`,
-    description: `Detailed description for ${item.url}.`
+    summary: first?.trim() || `Summary for ${item.title ?? "item"}`,
+    description: rest.join(" ").trim() || first?.trim() || ""
   };
 }
 
