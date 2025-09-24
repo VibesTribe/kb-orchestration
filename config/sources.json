@@ -2,7 +2,8 @@
   "raindrop": {
     "collections": [
       { "id": "0", "name": "vibeflow", "mode": "once" }
-    ]
+    ],
+    "defaultWindow": "1d"
   },
   "youtube": {
     "playlists": [
@@ -57,7 +58,8 @@
       { "handle": "intheworldofai", "mode": "weekly-once" },
       { "handle": "DenDev", "mode": "weekly-once" },
       { "handle": "theai.thing_1", "mode": "weekly-once" }
-    ]
+    ],
+    "defaultWindow": "1d"
   },
   "rss": [
     { "id": "huggingface", "url": "https://huggingface.co/blog/feed.xml", "mode": "pause" },
@@ -69,4 +71,3 @@
     { "id": "aihub", "url": "https://aihub.org/feed/?cat=-473", "mode": "pause" }
   ]
 }
-
