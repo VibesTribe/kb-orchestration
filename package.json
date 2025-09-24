@@ -6,7 +6,7 @@
     "pipeline": "node scripts/run-pipeline.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "node-fetch": "^3.3.2"
+    "dotenv": "16.4.5",
+    "node-fetch": "3.3.2"
   }
 }
