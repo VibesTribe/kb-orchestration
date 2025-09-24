@@ -30,6 +30,11 @@ jobs:
 
       - name: Refresh Raindrop token (optional; safe if missing refresh)
         env:
+          # GitHub tokens
+          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+
+          # Raindrop
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
@@ -38,6 +43,10 @@ jobs:
 
       - name: Run pipeline
         env:
+          # GitHub tokens
+          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
+
           # External APIs
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
