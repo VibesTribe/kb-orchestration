@@ -1,111 +1,52 @@
-import "dotenv/config";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+// scripts/run-pipeline.js
+// Orchestrates the full incremental knowledge pipeline:
+// ingest → enrich → classify → digest → publish → sync upstream
 
 import { ingest } from "./ingest.js";
 import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
 import { digest } from "./digest.js";
 import { publish } from "./publish.js";
-import { buildSystemStatus } from "./system-status.js";
+import { syncKnowledge, syncCuratedRun } from "./lib/kb-sync.js"; // ✅ fixed imports
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
-const STATE_FILE = path.join(CACHE_ROOT, "pipeline-state.json");
-const STATS_FILE = path.join(CACHE_ROOT, "stats.json");
+async function run() {
+  console.log("🚀 Starting knowledge pipeline...");
 
-function logStep(message, context = {}) {
-  const timestamp = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
-  console.log(`[${timestamp}] ${message}${payload}`);
-}
-
-async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
-}
-
-async function loadJson(file, fallback) {
   try {
-    return JSON.parse(await fs.readFile(file, "utf8"));
-  } catch {
-    return fallback;
+    // 1. Ingest new items
+    console.log("📥 Ingesting...");
+    await ingest();
+
+    // 2. Enrich with summaries/descriptions
+    console.log("✨ Enriching...");
+    await enrich();
+
+    // 3. Classify items against active projects
+    console.log("🏷️ Classifying...");
+    await classify();
+
+    // 4. Generate daily digest (json, txt, html)
+    console.log("📰 Building digest...");
+    await digest();
+
+    // 5. Publish local artifacts
+    console.log("📤 Publishing...");
+    await publish();
+
+    // 6. Push knowledge.json upstream
+    console.log("⬆️ Syncing knowledge.json...");
+    await syncKnowledge();
+
+    // 7. (Optional) Push curated runs upstream
+    // Uncomment if you want kb-site to consume curated directly
+    // console.log("⬆️ Syncing curated runs...");
+    // await syncCuratedRun("data/curated/latest");
+
+    console.log("✅ Pipeline completed successfully!");
+  } catch (err) {
+    console.error("❌ Pipeline failed:", err);
+    process.exit(1);
   }
 }
-async function saveJson(file, data) {
-  await ensureDir(path.dirname(file));
-  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
-}
 
-export async function runPipeline() {
-  const steps = [
-    { name: "Ingest", fn: ingest },
-    { name: "Enrich", fn: enrich },
-    { name: "Classify", fn: classify },
-    { name: "Digest", fn: digest },
-    { name: "Publish", fn: publish }
-  ];
-
-  const state = await loadJson(STATE_FILE, { completed: [] });
-  const stats = await loadJson(STATS_FILE, {
-    ingested: 0,
-    enriched: 0,
-    classified: 0,
-    digests: 0,
-    published: 0
-  });
-
-  for (const step of steps) {
-    if (state.completed.includes(step.name)) {
-      logStep(`⏩ Skipping ${step.name} (already completed)`);
-      continue;
-    }
-    logStep(`▶ Starting ${step.name}`);
-    try {
-      const result = await step.fn(); // each step may return {count}
-      if (result && typeof result.count === "number") {
-        if (step.name === "Ingest") stats.ingested += result.count;
-        if (step.name === "Enrich") stats.enriched += result.count;
-        if (step.name === "Classify") stats.classified += result.count;
-        if (step.name === "Digest") stats.digests += result.count;
-        if (step.name === "Publish") stats.published += result.count;
-      }
-
-      logStep(`✅ Completed ${step.name}`);
-      state.completed.push(step.name);
-      await saveJson(STATE_FILE, state);
-
-      await buildSystemStatus({
-        lastRunStep: step.name,
-        completedSteps: [...state.completed],
-        stats
-      });
-    } catch (error) {
-      console.error(`❌ ${step.name} failed`, { error: error?.message || String(error) });
-      await saveJson(STATE_FILE, state);
-      await buildSystemStatus({
-        lastRunStep: step.name,
-        completedSteps: [...state.completed],
-        stats
-      });
-      throw error;
-    }
-  }
-
-  logStep("🎉 Pipeline finished successfully");
-  await saveJson(STATE_FILE, { completed: [] }); // reset for next run
-  await buildSystemStatus({
-    lastRunStep: "Done",
-    completedSteps: [],
-    stats
-  });
-}
-
-// Run if invoked directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runPipeline().catch((error) => {
-    console.error("Pipeline failed", error);
-    process.exitCode = 1;
-  });
-}
+run();
