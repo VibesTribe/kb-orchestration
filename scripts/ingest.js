@@ -1,17 +1,15 @@
 // scripts/ingest.js
-// Ingest real data from Raindrop + YouTube, guided by config/sources.json
+// Reads config/sources.json and pulls actual items into data/ingest/
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fetch from "node-fetch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const CONFIG_FILE = path.join(ROOT_DIR, "config", "sources.json");
 const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
-
-const raindropToken = process.env.RAINDROP_TOKEN;
-const youtubeKey = process.env.YOUTUBE_API_KEY;
 
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
@@ -19,71 +17,75 @@ async function ensureDir(dirPath) {
 
 async function saveJson(filePath, data) {
   await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  const json = JSON.stringify(data, null, 2);
+  await fs.writeFile(filePath, json, "utf8");
 }
 
-async function ingestRaindrop(collections) {
-  if (!raindropToken) {
-    console.warn("No RAINDROP_TOKEN; skipping Raindrop");
-    return [];
-  }
-  const results = [];
-  for (const c of collections) {
-    const url = `https://api.raindrop.io/rest/v1/raindrop/${c.id}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${raindropToken}` },
-    });
-    if (!res.ok) {
-      console.warn(`Raindrop fetch failed for ${c.id}: ${res.status}`);
-      continue;
-    }
-    const json = await res.json();
-    if (json?.item) {
-      results.push({
-        id: `raindrop-${c.id}`,
-        title: json.item.title,
-        url: json.item.link,
+async function fetchRaindropCollection(collectionId, token) {
+  const items = [];
+  let page = 0;
+  while (true) {
+    const res = await fetch(
+      `https://api.raindrop.io/rest/v1/raindrops/${collectionId}?perpage=50&page=${page}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw new Error(`Raindrop fetch failed ${res.status}`);
+    const data = await res.json();
+    if (!data.items?.length) break;
+    for (const it of data.items) {
+      items.push({
+        id: `raindrop-${it._id}`,
+        title: it.title,
+        url: it.link,
+        created: it.created,
+        tags: it.tags,
         sourceType: "raindrop",
-        mode: c.mode,
-        collectedAt: new Date().toISOString(),
       });
     }
+    page++;
   }
-  return results;
+  return items;
 }
 
-async function ingestYouTube(playlists) {
-  if (!youtubeKey) {
-    console.warn("No YOUTUBE_API_KEY; skipping YouTube");
-    return [];
-  }
-  const results = [];
-  for (const p of playlists) {
-    const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=5&playlistId=${p.id}&key=${youtubeKey}`;
+async function fetchYouTubePlaylist(playlistId, apiKey) {
+  const items = [];
+  let pageToken = "";
+  do {
+    const url = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+    url.search = new URLSearchParams({
+      part: "snippet",
+      maxResults: "50",
+      playlistId,
+      key: apiKey,
+      pageToken,
+    });
+
     const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`YouTube fetch failed for ${p.id}: ${res.status}`);
-      continue;
-    }
-    const json = await res.json();
-    for (const item of json.items || []) {
-      results.push({
-        id: `yt-${item.id}`,
-        title: item.snippet.title,
-        url: `https://www.youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
-        sourceType: "youtube-playlist",
-        mode: p.mode,
-        collectedAt: new Date().toISOString(),
+    if (!res.ok) throw new Error(`YouTube fetch failed ${res.status}`);
+    const data = await res.json();
+
+    for (const it of data.items ?? []) {
+      const snip = it.snippet;
+      if (!snip) continue;
+      items.push({
+        id: `yt-${snip.resourceId?.videoId}`,
+        title: snip.title,
+        url: `https://www.youtube.com/watch?v=${snip.resourceId?.videoId}`,
+        publishedAt: snip.publishedAt,
+        sourceType: "youtube",
       });
     }
-  }
-  return results;
+
+    pageToken = data.nextPageToken || "";
+  } while (pageToken);
+  return items;
 }
 
 export async function ingest() {
   let sources;
   try {
-    sources = JSON.parse(await fs.readFile(CONFIG_FILE, "utf8"));
+    const raw = await fs.readFile(CONFIG_FILE, "utf8");
+    sources = JSON.parse(raw);
   } catch {
     console.warn("No valid config/sources.json found; skipping ingest");
     return [];
@@ -94,25 +96,51 @@ export async function ingest() {
   const ingestDir = path.join(INGEST_ROOT, dayDir, timestamp);
   await ensureDir(ingestDir);
 
-  let items = [];
+  const allItems = [];
+
+  // 🔹 Raindrop collections
   if (sources.raindrop?.collections?.length) {
-    items = items.concat(await ingestRaindrop(sources.raindrop.collections));
+    for (const c of sources.raindrop.collections) {
+      try {
+        const raindrops = await fetchRaindropCollection(
+          c.id,
+          process.env.RAINDROP_TOKEN
+        );
+        allItems.push(...raindrops);
+        console.log(`Fetched ${raindrops.length} from Raindrop ${c.name}`);
+      } catch (err) {
+        console.error("Raindrop error", c.name, err);
+      }
+    }
   }
+
+  // 🔹 YouTube playlists
   if (sources.youtube?.playlists?.length) {
-    items = items.concat(await ingestYouTube(sources.youtube.playlists));
+    for (const p of sources.youtube.playlists) {
+      try {
+        const vids = await fetchYouTubePlaylist(
+          p.id,
+          process.env.YOUTUBE_API_KEY
+        );
+        allItems.push(...vids);
+        console.log(`Fetched ${vids.length} from YouTube playlist ${p.id}`);
+      } catch (err) {
+        console.error("YouTube playlist error", p.id, err);
+      }
+    }
   }
 
   await saveJson(path.join(ingestDir, "items.json"), {
-    items,
+    items: allItems,
     generatedAt: new Date().toISOString(),
   });
 
   console.log("Ingest complete:", {
-    itemCount: items.length,
+    itemCount: allItems.length,
     dir: ingestDir,
   });
 
-  return items;
+  return allItems;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
