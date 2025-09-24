@@ -1,58 +1,81 @@
 // scripts/ingest.js
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+// Reads config/sources.json and writes ingest checkpoints under data/ingest/
+
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..", "..");
+const CONFIG_FILE = path.join(ROOT_DIR, "config", "sources.json");
+const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
+
+async function ensureDir(dirPath) {
+  await fs.mkdir(dirPath, { recursive: true });
+}
+
+async function saveJson(filePath, data) {
+  await ensureDir(path.dirname(filePath));
+  const json = JSON.stringify(data, null, 2);
+  await fs.writeFile(filePath, json, "utf8");
+}
 
 export async function ingest() {
-  const cacheDir = path.resolve(__dirname, "../data/cache");
-  await mkdir(cacheDir, { recursive: true });
-
-  // ✅ Correct location of your sources.json
-  const sourcesPath = path.resolve(__dirname, "../config/sources.json");
-
   let sources;
   try {
-    const raw = await readFile(sourcesPath, "utf8");
+    const raw = await fs.readFile(CONFIG_FILE, "utf8");
     sources = JSON.parse(raw);
-  } catch (e) {
-    console.warn("⚠️ No config/sources.json found; skipping ingest");
+  } catch (err) {
+    console.warn("No valid config/sources.json found; skipping ingest");
     return [];
   }
 
-  const results = [];
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dayDir = new Date().toISOString().split("T")[0];
+  const ingestDir = path.join(INGEST_ROOT, dayDir, timestamp);
+  await ensureDir(ingestDir);
 
+  // Minimal example: just log sources and checkpoint
+  const items = [];
   if (sources.raindrop?.collections?.length) {
-    console.log(
-      `📚 Found ${sources.raindrop.collections.length} Raindrop collections`
-    );
     for (const c of sources.raindrop.collections) {
-      results.push({ type: "raindrop", id: c.id, name: c.name, mode: c.mode });
+      items.push({
+        id: `raindrop-${c.id}`,
+        title: `Raindrop collection ${c.name}`,
+        sourceType: "raindrop",
+        mode: c.mode,
+        collectedAt: new Date().toISOString(),
+      });
+    }
+  }
+  if (sources.youtube?.playlists?.length) {
+    for (const p of sources.youtube.playlists) {
+      items.push({
+        id: `yt-${p.id}`,
+        title: `YouTube playlist ${p.id}`,
+        sourceType: "youtube-playlist",
+        mode: p.mode,
+        collectedAt: new Date().toISOString(),
+      });
     }
   }
 
-  if (sources.youtube?.playlists?.length || sources.youtube?.channels?.length) {
-    console.log(
-      `📺 Found ${sources.youtube.playlists?.length ?? 0} playlists and ${
-        sources.youtube.channels?.length ?? 0
-      } channels`
-    );
-    for (const p of sources.youtube.playlists ?? []) {
-      results.push({ type: "youtube-playlist", id: p.id, mode: p.mode });
-    }
-    for (const ch of sources.youtube.channels ?? []) {
-      results.push({ type: "youtube-channel", handle: ch.handle, mode: ch.mode });
-    }
-  }
+  await saveJson(path.join(ingestDir, "items.json"), {
+    items,
+    generatedAt: new Date().toISOString(),
+  });
 
-  if (sources.rss?.length) {
-    console.log(`📰 Found ${sources.rss.length} RSS feeds`);
-    for (const feed of sources.rss) {
-      results.push({ type: "rss", id: feed.id, url: feed.url, mode: feed.mode });
-    }
-  }
+  console.log("Ingest complete:", {
+    itemCount: items.length,
+    dir: ingestDir,
+  });
 
-  // Write snapshot to cache for later steps
-  const outPath = path.join(cacheDir, "ingest.json");
-  await writeFile(outPath, JSON.stringify(results, null,
+  return items;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  ingest().catch((err) => {
+    console.error("Ingest failed", err);
+    process.exitCode = 1;
+  });
+}
