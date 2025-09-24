@@ -2,44 +2,6 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { callOpenRouter } from "./openrouter.js";
-
-/* ------------------ Utilities ------------------ */
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
-}
-async function loadJson(filePath, fallback = null) {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-async function saveJson(filePath, data) {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-async function loadText(filePath) {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return "";
-  }
-}
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
-}
-function log(message, context = {}) {
-  const ts = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
-  console.log(`[${ts}] ${message}${payload}`);
-}
 
 /* ------------------ Paths ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,171 +11,91 @@ const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
 const STATE_FILE = path.join(CACHE_ROOT, "classify-state.json");
 
-/* ------------------ State helpers ------------------ */
-async function loadState() {
-  return (await loadJson(STATE_FILE, { completedItems: [] }));
-}
-async function saveState(state) {
-  await saveJson(STATE_FILE, state);
-}
+/* ------------------ Utils ------------------ */
+async function ensureDir(d){ await fs.mkdir(d,{recursive:true}); }
+async function loadJson(f, fb){ try{ return JSON.parse(await fs.readFile(f,"utf8")); }catch{ return fb; } }
+async function saveJson(f, d){ await ensureDir(path.dirname(f)); await fs.writeFile(f, JSON.stringify(d,null,2), "utf8"); }
+async function listDirectories(p){ try{ const e=await fs.readdir(p,{withFileTypes:true}); return e.filter(x=>x.isDirectory()).map(x=>x.name);}catch{return[];} }
+function log(m,ctx={}){ const ts=new Date().toISOString(); console.log(`[${ts}] ${m}${Object.keys(ctx).length?" "+JSON.stringify(ctx):""}`); }
 
-/* ------------------ Project loader ------------------ */
-async function loadProjects() {
-  const projects = [];
-  const projectDirs = await listDirectories(PROJECTS_ROOT);
-
-  for (const dir of projectDirs) {
-    const projectJson = await loadJson(path.join(PROJECTS_ROOT, dir, "project.json"), null);
-    if (!projectJson) continue;
-    if (projectJson.status && projectJson.status.toLowerCase() !== "active") continue;
-
-    const prdText = await loadText(path.join(PROJECTS_ROOT, dir, "prd.md"));
-    const changelogText = await loadText(path.join(PROJECTS_ROOT, dir, "changelog.md"));
-
-    projects.push({
-      key: dir,
-      ...projectJson,
-      prd: prdText,
-      changelog: changelogText,
-    });
-  }
-  return projects;
-}
-
-/* ------------------ Curated loader ------------------ */
-async function getLatestCuratedRun() {
-  const dayDirs = await listDirectories(CURATED_ROOT);
-  if (!dayDirs.length) return null;
-  dayDirs.sort().reverse();
-
-  for (const dayDir of dayDirs) {
-    const stampDirs = await listDirectories(path.join(CURATED_ROOT, dayDir));
-    stampDirs.sort().reverse();
-    for (const stampDir of stampDirs) {
-      const itemsPath = path.join(CURATED_ROOT, dayDir, stampDir, "items.json");
-      const items = await loadJson(itemsPath, null);
-      if (items) {
-        return { dayDir, stampDir, itemsPath, content: items };
-      }
+/* ------------------ Curated helpers ------------------ */
+async function getLatestCuratedRun(){
+  const days = await listDirectories(CURATED_ROOT); if(!days.length) return null;
+  days.sort().reverse();
+  for(const d of days){
+    const stamps = await listDirectories(path.join(CURATED_ROOT,d));
+    stamps.sort().reverse();
+    for(const s of stamps){
+      const itemsPath = path.join(CURATED_ROOT,d,s,"items.json");
+      const content = await loadJson(itemsPath, null);
+      if(content) return { dayDir:d, stampDir:s, itemsPath, content };
     }
   }
   return null;
 }
 
-/* ------------------ Classification logic ------------------ */
-async function classifyItemAgainstProject(item, project) {
-  const systemPrompt = `
-You are a precise classification agent. 
-Classify the following item for the project "${project.name}".
-Return JSON with keys: usefulness (HIGH|MODERATE|ARCHIVE), reason, nextSteps.
-Be strict and consistent. Use the PRD and usefulness criteria provided.
-`;
-
-  const userPrompt = `
-Project Summary:
-${project.summary}
-
-Objectives:
-${(project.objectives ?? []).join("\n")}
-
-Tech Stack:
-${(project.techStack ?? []).join(", ")}
-
-Usefulness Criteria:
-High: ${(project.usefulnessCriteria?.high ?? []).join(" | ")}
-Moderate: ${(project.usefulnessCriteria?.moderate ?? []).join(" | ")}
-Archive: ${(project.usefulnessCriteria?.archive ?? []).join(" | ")}
-
-Prompt Hint:
-${project.promptHints?.classification ?? ""}
-
-PRD:
-${project.prd?.slice(0, 4000) ?? ""}
-
-Changelog (recent lines):
-${project.changelog?.slice(0, 20).join("\n") ?? ""}
-
----
-Item to classify:
-Title: ${item.title}
-Summary: ${item.summary ?? ""}
-Description: ${item.description ?? ""}
-Tags: ${(item.tags ?? []).join(", ")}
-URL: ${item.url ?? ""}
-`;
-
-  const { content } = await callOpenRouter(
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    { maxTokens: 300 }
-  );
-
-  try {
-    const parsed = JSON.parse(content);
-    return {
-      project: project.name ?? project.key,
-      projectKey: project.key,
-      usefulness: parsed.usefulness?.toUpperCase() ?? "ARCHIVE",
-      reason: parsed.reason ?? "No reason given",
-      nextSteps: parsed.nextSteps ?? "",
-    };
-  } catch {
-    // fallback if LLM didn’t return JSON
-    return {
-      project: project.name ?? project.key,
-      projectKey: project.key,
-      usefulness: "ARCHIVE",
-      reason: "LLM response parse failed",
-      nextSteps: "",
-    };
+/* ------------------ Projects ------------------ */
+async function loadProjects(){
+  const dirs = await listDirectories(PROJECTS_ROOT);
+  const projects = [];
+  for(const dir of dirs){
+    const cfg = await loadJson(path.join(PROJECTS_ROOT, dir, "project.json"), null);
+    if(!cfg) continue;
+    if (cfg.status && String(cfg.status).toLowerCase() !== "active") continue;
+    const prd = await (async()=>{ try{ return await fs.readFile(path.join(PROJECTS_ROOT, dir, "prd.md"), "utf8"); }catch{ return ""; }})();
+    projects.push({ key: dir, prd, ...cfg });
   }
+  return projects;
 }
 
-/* ------------------ Main classify step ------------------ */
-export async function classify() {
-  const curatedRun = await getLatestCuratedRun();
-  if (!curatedRun) {
-    log("No curated run found; skip classify");
-    return;
-  }
+/* ------------------ Heuristic classifier ------------------ */
+function classifyItemForProject(item, project){
+  const text = [
+    item.title ?? "", item.summary ?? "", item.description ?? "",
+    (item.tags ?? []).join(" "), project.prd ?? "", (project.objectives ?? []).join(" ")
+  ].join("\n").toLowerCase();
+
+  const high = (project.usefulnessCriteria?.high ?? []).some(k => text.includes(k.toLowerCase()));
+  const moderate = (project.usefulnessCriteria?.moderate ?? []).some(k => text.includes(k.toLowerCase()));
+
+  if (high) return { project: project.name ?? project.key, projectKey: project.key, usefulness: "HIGH", reason: "Matches high usefulness criteria.", nextSteps: "Evaluate for integration." };
+  if (moderate) return { project: project.name ?? project.key, projectKey: project.key, usefulness: "MODERATE", reason: "Matches moderate usefulness criteria.", nextSteps: "Monitor and adapt soon." };
+  return { project: project.name ?? project.key, projectKey: project.key, usefulness: "ARCHIVE", reason: "Not actionable for current quarter.", nextSteps: "" };
+}
+
+/* ------------------ State ------------------ */
+async function loadState(){ return loadJson(STATE_FILE, { done: [] }); }
+async function saveState(s){ await saveJson(STATE_FILE, s); }
+
+/* ------------------ Main ------------------ */
+export async function classify(){
+  const run = await getLatestCuratedRun();
+  if(!run){ log("No curated run; skip classify"); return; }
 
   const projects = await loadProjects();
-  if (!projects.length) {
-    log("No active projects found; skip classify");
-    return;
-  }
+  if(!projects.length){ log("No active projects; skip classify"); return; }
 
   const state = await loadState();
-  const items = curatedRun.content.items ?? [];
+  let updated = 0;
 
-  for (const item of items) {
-    if (state.completedItems.includes(item.id)) continue; // already classified
+  for(const item of (run.content.items ?? [])){
+    const id = item.canonicalId ?? item.id; if(!id) continue;
+    if (state.done.includes(id)) continue;
 
-    const assignments = [];
-    for (const project of projects) {
-      const classification = await classifyItemAgainstProject(item, project);
-      assignments.push(classification);
-    }
+    const assignments = projects.map(p => classifyItemForProject(item, p));
+    item.projects = assignments;
+    item.assignedProjects = assignments.map(a => a.project);
 
-    item.projects = assignments; // keep consistent with digest.js
-    state.completedItems.push(item.id);
-
-    // Save incrementally
-    await saveJson(curatedRun.itemsPath, curatedRun.content);
-    await saveState(state);
-
-    log("Classified item", { id: item.id, title: item.title });
+    await saveJson(run.itemsPath, run.content); // incremental safety
+    state.done.push(id); await saveState(state);
+    updated += 1;
   }
 
-  log("Classification complete", { itemCount: items.length });
+  if(updated === 0) log("No items required classification");
+  else log("Classification complete", { items: updated });
 }
 
 /* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  classify().catch((err) => {
-    console.error("Classify step failed", err);
-    process.exitCode = 1;
-  });
+  classify().catch(err => { console.error("Classify step failed", err); process.exitCode = 1; });
 }
