@@ -1,86 +1,153 @@
+// scripts/enrich.js
+// Incremental enrichment of data/knowledge.json items using OpenRouter.
+// Saves state to data/cache/enrich-state.json so partial runs are preserved.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { callOpenRouter } from "./openrouter.js";
+import { callOpenRouter } from "./lib/openrouter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
-const DATA = path.join(ROOT, "data");
-const CACHE = path.join(DATA, "cache");
-const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
-const CURATED = path.join(DATA, "curated");
-const STATE_FILE = path.join(CACHE, "enrich-state.json");
-const STATS_FILE = path.join(CACHE, "summaries.json");
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
+const STATE_FILE = path.join(CACHE_DIR, "enrich-state.json");
+const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
 
-function log(m, c={}){ console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length?c:""); }
-async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
-async function loadJson(p, fb){ try { return JSON.parse(await fs.readFile(p,"utf8")); } catch { return fb; } }
-async function saveJson(p, v){ await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v,null,2), "utf8"); }
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+}
 
-async function latestCuratedRun() {
-  const days = await fs.readdir(CURATED).catch(()=>[]);
-  days.sort().reverse();
-  for (const d of days) {
-    const dPath = path.join(CURATED, d);
-    const stamps = await fs.readdir(dPath).catch(()=>[]);
-    stamps.sort().reverse();
-    for (const s of stamps) {
-      const f = path.join(dPath, s, "items.json");
-      const json = await loadJson(f, null);
-      if (json) return { path: f, content: json };
-    }
+async function loadJson(file, fallback) {
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
   }
-  return null;
+}
+
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+}
+
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  const payload = Object.keys(ctx).length ? ` ${JSON.stringify(ctx)}` : "";
+  console.log(`[${ts}] ${msg}${payload}`);
+}
+
+async function loadState() {
+  return loadJson(STATE_FILE, { enrichedIds: [] });
+}
+
+async function saveState(state) {
+  await saveJson(STATE_FILE, state);
+}
+
+function identifierFor(item) {
+  // Some sources use id, some canonicalId — normalize
+  return item.id ?? item.canonicalId ?? item.url ?? JSON.stringify(item).slice(0, 64);
+}
+
+// Build a friendly prompt/messages for the LLM
+function buildMessages(item, projectHints = "") {
+  const system = {
+    role: "system",
+    content: `You are a concise summarization assistant. Produce a short summary (one paragraph, max 2-3 sentences) and a slightly longer description (3-6 sentences) that explains usefulness and actionable next steps.`
+  };
+
+  const userParts = [
+    `Title: ${item.title ?? "(untitled)"}`,
+    item.summary ? `Existing summary: ${item.summary}` : "",
+    item.description ? `Existing description: ${item.description}` : "",
+    item.url ? `URL: ${item.url}` : "",
+    projectHints ? `Project hints: ${projectHints}` : ""
+  ].filter(Boolean).join("\n\n");
+
+  const user = {
+    role: "user",
+    content: `Create:\n1) A short 'summary' (1 paragraph) suitable for quick digest.\n2) A 'description' (3-6 sentences) suitable for indexed knowledgebase.\n\nInput:\n${userParts}`
+  };
+
+  return [system, user];
 }
 
 export async function enrich() {
-  const kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
-  const state = await loadJson(STATE_FILE, { enrichedIds: [] });
-  const run = await latestCuratedRun();
-  if (!run) { log("No curated data found; skip enrich"); await saveJson(STATS_FILE, { enriched: 0 }); return; }
+  const kb = await loadJson(KNOWLEDGE_FILE, { generatedAt: new Date().toISOString(), items: [] });
+  const state = await loadState();
 
-  let enriched = 0;
-  for (const item of run.content.items) {
-    if (!item) continue;
-    const id = item.canonicalId || item.id;
-    if (state.enrichedIds.includes(id)) continue;
-    if (item.summary && item.description) { state.enrichedIds.push(id); continue; }
-
-    // LLM prompt (concise, cheap)
-    const messages = [
-      { role: "system", content: "You write crisp 2-3 sentence summaries and a one-paragraph description for technical links. Avoid fluff." },
-      { role: "user", content: `Title: ${item.title || "(untitled)"}\nURL: ${item.url}\n\nReturn JSON with keys: summary, description.` }
-    ];
+  let updated = 0;
+  for (const item of kb.items ?? []) {
+    const id = identifierFor(item);
+    if (state.enrichedIds.includes(id)) continue; // already done
+    // Skip items that already have both summary and description
+    if (item.summary && item.description) {
+      state.enrichedIds.push(id);
+      await saveState(state);
+      continue;
+    }
 
     try {
-      const { content } = await callOpenRouter(messages, { maxTokens: 300, temperature: 0.2 });
-      let parsed;
-      try { parsed = JSON.parse(content); } catch { parsed = {}; }
-      item.summary = parsed.summary || item.summary || "";
-      item.description = parsed.description || item.description || "";
+      const messages = buildMessages(item);
+      // Call OpenRouter — keep it small tokens to avoid runaway consumption
+      const { content, model } = await callOpenRouter(messages, { maxTokens: 400, temperature: 0.15 }).catch(err => {
+        throw new Error(`OpenRouter error: ${err.message}`);
+      });
+
+      // Expect the model to return a block we can parse. We'll try simple heuristics.
+      // Look for "Summary:" / "Description:" markers, otherwise split.
+      let summary = "";
+      let description = "";
+
+      const lower = content.toLowerCase();
+      if (lower.includes("summary") && lower.includes("description")) {
+        const sMatch = content.match(/summary[:\s]*([\s\S]*?)(?=description[:\s]*|$)/i);
+        const dMatch = content.match(/description[:\s]*([\s\S]*)/i);
+        summary = sMatch ? sMatch[1].trim() : "";
+        description = dMatch ? dMatch[1].trim() : "";
+      } else {
+        // fallback: first sentence(s) as summary, rest as description
+        const sentences = content.split(/(?<=[.?!])\s+/);
+        summary = sentences.slice(0, 1).join(" ").trim();
+        description = sentences.slice(1).join(" ").trim() || content;
+      }
+
+      // Write back to item
+      item.summary = item.summary || summary;
+      item.description = item.description || description;
+      item._enrichedBy = item._enrichedBy ?? {};
+      item._enrichedBy[ (new Date()).toISOString() ] = { model };
+
       state.enrichedIds.push(id);
-      enriched++;
+      updated++;
 
-      // also update KB copy
-      const kbItem = kb.items.find(x => (x.canonicalId||x.id) === id);
-      if (kbItem) { kbItem.summary = item.summary; kbItem.description = item.description; }
-
-      // incremental saves
-      await saveJson(run.path, run.content);
+      // Save after each item so partial progress is preserved
       await saveJson(KNOWLEDGE_FILE, kb);
-      await saveJson(STATE_FILE, state);
-    } catch (e) {
-      log("Enrich failed for item", { id, error: e.message });
-      // keep progress; let pipeline continue
-      await saveJson(STATE_FILE, state);
-      break;
+      await saveState(state);
+
+      log("Enriched item", { id, title: item.title, model });
+    } catch (err) {
+      log("Failed to enrich item", { title: item.title ?? "(untitled)", error: err.message });
+      // Save state and kb to preserve what we have
+      await saveJson(KNOWLEDGE_FILE, kb);
+      await saveState(state);
+      // Throw so pipeline can record failure (but state saved)
+      throw err;
     }
   }
 
-  await saveJson(STATS_FILE, { enriched });
-  log(`Enriched ${enriched} items`);
+  if (updated === 0) {
+    log("No items needed enrichment");
+  } else {
+    log(`Enriched ${updated} item(s)`);
+  }
 }
 
+// Run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  enrich().catch((e)=>{ console.error("Enrich failed", e); process.exitCode=1; });
+  enrich().catch(err => {
+    console.error("Enrich failed", err);
+    process.exitCode = 1;
+  });
 }
