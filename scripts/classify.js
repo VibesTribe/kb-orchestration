@@ -1,101 +1,95 @@
-import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/* ------------------ Paths ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const PROJECTS_ROOT = path.join(ROOT_DIR, "projects");
-const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
-const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
-const STATE_FILE = path.join(CACHE_ROOT, "classify-state.json");
+const ROOT = path.resolve(__dirname, "..");
+const DATA = path.join(ROOT, "data");
+const CURATED = path.join(DATA, "curated");
+const CACHE = path.join(DATA, "cache");
+const PROJECTS_ROOT = path.join(ROOT, "projects");
+const STATE_FILE = path.join(CACHE, "classify-state.json");
+const STATS_FILE = path.join(CACHE, "classify-stats.json");
 
-/* ------------------ Utils ------------------ */
-async function ensureDir(d){ await fs.mkdir(d,{recursive:true}); }
-async function loadJson(f, fb){ try{ return JSON.parse(await fs.readFile(f,"utf8")); }catch{ return fb; } }
-async function saveJson(f, d){ await ensureDir(path.dirname(f)); await fs.writeFile(f, JSON.stringify(d,null,2), "utf8"); }
-async function listDirectories(p){ try{ const e=await fs.readdir(p,{withFileTypes:true}); return e.filter(x=>x.isDirectory()).map(x=>x.name);}catch{return[];} }
-function log(m,ctx={}){ const ts=new Date().toISOString(); console.log(`[${ts}] ${m}${Object.keys(ctx).length?" "+JSON.stringify(ctx):""}`); }
+function log(m, c={}){ console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length?c:""); }
+async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
+async function loadJson(p, fb){ try { return JSON.parse(await fs.readFile(p,"utf8")); } catch { return fb; } }
+async function saveJson(p, v){ await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v,null,2), "utf8"); }
+async function loadText(p){ try { return await fs.readFile(p,"utf8"); } catch { return ""; } }
 
-/* ------------------ Curated helpers ------------------ */
-async function getLatestCuratedRun(){
-  const days = await listDirectories(CURATED_ROOT); if(!days.length) return null;
+async function latestCuratedRun() {
+  const days = await fs.readdir(CURATED).catch(()=>[]);
   days.sort().reverse();
-  for(const d of days){
-    const stamps = await listDirectories(path.join(CURATED_ROOT,d));
+  for (const d of days) {
+    const dPath = path.join(CURATED, d);
+    const stamps = await fs.readdir(dPath).catch(()=>[]);
     stamps.sort().reverse();
-    for(const s of stamps){
-      const itemsPath = path.join(CURATED_ROOT,d,s,"items.json");
-      const content = await loadJson(itemsPath, null);
-      if(content) return { dayDir:d, stampDir:s, itemsPath, content };
+    for (const s of stamps) {
+      const f = path.join(dPath, s, "items.json");
+      const json = await loadJson(f, null);
+      if (json) return { path: f, content: json };
     }
   }
   return null;
 }
 
-/* ------------------ Projects ------------------ */
-async function loadProjects(){
-  const dirs = await listDirectories(PROJECTS_ROOT);
+async function loadProjects() {
+  const dirs = await fs.readdir(PROJECTS_ROOT).catch(()=>[]);
   const projects = [];
-  for(const dir of dirs){
+  for (const dir of dirs) {
     const cfg = await loadJson(path.join(PROJECTS_ROOT, dir, "project.json"), null);
-    if(!cfg) continue;
-    if (cfg.status && String(cfg.status).toLowerCase() !== "active") continue;
-    const prd = await (async()=>{ try{ return await fs.readFile(path.join(PROJECTS_ROOT, dir, "prd.md"), "utf8"); }catch{ return ""; }})();
-    projects.push({ key: dir, prd, ...cfg });
+    if (!cfg) continue;
+    if ((cfg.status||"active").toLowerCase() !== "active") continue;
+    const prd = await loadText(path.join(PROJECTS_ROOT, dir, "prd.md"));
+    const changelog = await loadText(path.join(PROJECTS_ROOT, dir, "changelog.md"));
+    projects.push({ key: dir, ...cfg, prd, changelog });
   }
   return projects;
 }
 
-/* ------------------ Heuristic classifier ------------------ */
-function classifyItemForProject(item, project){
-  const text = [
-    item.title ?? "", item.summary ?? "", item.description ?? "",
-    (item.tags ?? []).join(" "), project.prd ?? "", (project.objectives ?? []).join(" ")
-  ].join("\n").toLowerCase();
+function classifyItem(item, project) {
+  const text = `${item.title||""}\n${item.summary||""}\n${item.description||""}`.toLowerCase();
+  const high = (project.usefulnessCriteria?.high ?? []).some(s => text.includes(s.toLowerCase()));
+  const moderate = !high && (project.usefulnessCriteria?.moderate ?? []).some(s => text.includes(s.toLowerCase()));
 
-  const high = (project.usefulnessCriteria?.high ?? []).some(k => text.includes(k.toLowerCase()));
-  const moderate = (project.usefulnessCriteria?.moderate ?? []).some(k => text.includes(k.toLowerCase()));
+  let usefulness = "archive";
+  let reason = "Not directly aligned to PRD/usefulness criteria.";
+  let nextSteps = null;
+  if (high) { usefulness = "HIGH"; reason = "Matches high usefulness criteria."; nextSteps = "Evaluate for direct integration."; }
+  else if (moderate) { usefulness = "MODERATE"; reason = "Matches moderate usefulness criteria."; nextSteps = "Monitor/apply soon."; }
 
-  if (high) return { project: project.name ?? project.key, projectKey: project.key, usefulness: "HIGH", reason: "Matches high usefulness criteria.", nextSteps: "Evaluate for integration." };
-  if (moderate) return { project: project.name ?? project.key, projectKey: project.key, usefulness: "MODERATE", reason: "Matches moderate usefulness criteria.", nextSteps: "Monitor and adapt soon." };
-  return { project: project.name ?? project.key, projectKey: project.key, usefulness: "ARCHIVE", reason: "Not actionable for current quarter.", nextSteps: "" };
+  return { project: project.name, projectKey: project.key, usefulness, reason, nextSteps };
 }
 
-/* ------------------ State ------------------ */
-async function loadState(){ return loadJson(STATE_FILE, { done: [] }); }
-async function saveState(s){ await saveJson(STATE_FILE, s); }
-
-/* ------------------ Main ------------------ */
-export async function classify(){
-  const run = await getLatestCuratedRun();
-  if(!run){ log("No curated run; skip classify"); return; }
+export async function classify() {
+  const run = await latestCuratedRun();
+  if (!run) { log("No curated run; skip classify"); await saveJson(STATS_FILE, { count: 0 }); return; }
 
   const projects = await loadProjects();
-  if(!projects.length){ log("No active projects; skip classify"); return; }
+  if (!projects.length) { log("No active projects; skip classify"); await saveJson(STATS_FILE, { count: 0 }); return; }
 
-  const state = await loadState();
-  let updated = 0;
+  const state = await loadJson(STATE_FILE, { completedItems: [] });
 
-  for(const item of (run.content.items ?? [])){
-    const id = item.canonicalId ?? item.id; if(!id) continue;
-    if (state.done.includes(id)) continue;
+  let changed = 0;
+  for (const item of run.content.items ?? []) {
+    const id = item.canonicalId || item.id;
+    if (state.completedItems.includes(id)) continue;
 
-    const assignments = projects.map(p => classifyItemForProject(item, p));
-    item.projects = assignments;
+    const assignments = projects.map(p => classifyItem(item, p));
+    // store under BOTH keys used elsewhere
     item.assignedProjects = assignments.map(a => a.project);
+    item.projects = assignments;
 
-    await saveJson(run.itemsPath, run.content); // incremental safety
-    state.done.push(id); await saveState(state);
-    updated += 1;
+    state.completedItems.push(id);
+    changed++;
+    await saveJson(run.path, run.content);
+    await saveJson(STATE_FILE, state);
   }
 
-  if(updated === 0) log("No items required classification");
-  else log("Classification complete", { items: updated });
+  await saveJson(STATS_FILE, { count: changed });
+  log("Classification complete", { items: changed });
 }
 
-/* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  classify().catch(err => { console.error("Classify step failed", err); process.exitCode = 1; });
+  classify().catch((e)=>{ console.error("Classify failed", e); process.exitCode=1; });
 }
