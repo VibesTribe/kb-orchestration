@@ -1,10 +1,9 @@
-# .github/workflows/pipeline.yml
 name: pipeline
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:        # allow manual trigger
   schedule:
-    - cron: "0 6 * * *" # daily 6am UTC
+    - cron: "0 6 * * *"     # daily 6am UTC
 
 jobs:
   pipeline:
@@ -34,6 +33,28 @@ jobs:
       - name: Run pipeline
         run: node scripts/run-pipeline.js
         env:
-          # 🔑 Core secrets
+          # 🔑 Required secrets
           KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+
+          # 🔑 Brevo for daily digests
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
+
+          # PAT for repo operations (if needed later)
+          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+
+      - name: Upload pipeline artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-artifacts
+          path: |
+            data/cache/**
+            data/curated/**
+            data/digest/**
+            data/publish/**
+            data/knowledge.json
