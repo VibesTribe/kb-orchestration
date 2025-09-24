@@ -1,349 +1,243 @@
-// scripts/ingest.js
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Parser from "rss-parser";
 
-/* ───────── Paths & Constants ───────── */
+/* ------------------ Paths ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
-const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
-const STATE_FILE = path.join(CACHE_DIR, "ingest-state.json");
+const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
+const CACHE_ROOT = path.join(ROOT_DIR, "data", "cache");
+const STATE_FILE = path.join(CACHE_ROOT, "ingest-state.json");
 const SOURCES_FILE = path.join(ROOT_DIR, "sources.json");
 const KNOWLEDGE_FILE = path.join(ROOT_DIR, "data", "knowledge.json");
 
-const RAINDROP_API = "https://api.raindrop.io/rest/v1";
-const YT_API = "https://www.googleapis.com/youtube/v3";
-
-const RAINDROP_TOKEN = process.env.RAINDROP_TOKEN;
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-
-const rss = new (class extends Parser {})();
-
-/* ───────── Utils ───────── */
-async function ensureDir(d) { await fs.mkdir(d, { recursive: true }); }
-async function loadJson(f, fb) { try { return JSON.parse(await fs.readFile(f, "utf8")); } catch { return fb; } }
-async function saveJson(f, d) { await ensureDir(path.dirname(f)); await fs.writeFile(f, JSON.stringify(d, null, 2), "utf8"); }
-function log(msg, ctx = {}) { const ts = new Date().toISOString(); console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : ""); }
-
-function windowToSinceISO(win = "1d") {
-  const m = String(win).match(/^(\d+)\s*(d|w|m)$/i);
-  const now = new Date();
-  if (!m) return new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
-  const n = parseInt(m[1], 10);
-  const unit = m[2].toLowerCase();
-  let ms = 24 * 3600 * 1000;
-  if (unit === "w") ms *= 7;
-  if (unit === "m") ms *= 30;
-  return new Date(now.getTime() - n * ms).toISOString();
+/* ------------------ Small utils ------------------ */
+async function ensureDir(dir) { await fs.mkdir(dir, { recursive: true }); }
+async function loadJson(file, fallback) {
+  try { return JSON.parse(await fs.readFile(file, "utf8")); } catch { return fallback; }
 }
-function normalizeCollection(c) {
-  if (!c || c === "0" || /^\d+$/.test(c)) return "misc";
-  return String(c).toLowerCase();
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
-
-/* Track new insertions */
-function pushIfNew(kbItems, item, newItems) {
-  if (!kbItems.find((i) => i.id === item.id)) {
-    kbItems.push(item);
-    newItems.push(item);
-  }
+async function listDirectories(parent) {
+  try { const entries = await fs.readdir(parent, { withFileTypes: true });
+    return entries.filter(e=>e.isDirectory()).map(e=>e.name);
+  } catch { return []; }
 }
-
-/* ───────── Loaders ───────── */
-async function loadSources() {
-  return loadJson(SOURCES_FILE, { raindrop: {}, youtube: {}, rss: [] });
+function log(msg, ctx={}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${msg}${Object.keys(ctx).length ? " " + JSON.stringify(ctx) : ""}`);
 }
-async function loadState() {
-  return loadJson(STATE_FILE, { completedOnce: {}, lastCount: 0 });
+function isoFromWindow(windowStr = "1d") {
+  const n = parseInt(windowStr, 10) || 1;
+  const unit = windowStr.replace(String(n), "").trim().toLowerCase(); // d,w,m
+  const msPer = unit === "w" ? 7*864e5 : unit === "m" ? 30*864e5 : 864e5;
+  return new Date(Date.now() - n * msPer).toISOString();
 }
-async function saveState(state) {
-  await saveJson(STATE_FILE, state);
-}
-async function loadKnowledge() {
-  return loadJson(KNOWLEDGE_FILE, { generatedAt: new Date().toISOString(), items: [] });
-}
-async function saveKnowledge(kb) {
-  kb.generatedAt = new Date().toISOString();
-  await saveJson(KNOWLEDGE_FILE, kb);
-}
-
-/* ───────── Raindrop ───────── */
-async function fetchRaindropCollection({ collectionId, sinceISO, perPage = 100 }) {
-  if (!RAINDROP_TOKEN) throw new Error("RAINDROP_TOKEN is not configured");
-
-  const searchQuery = sinceISO ? `created:>=${sinceISO}` : undefined;
-  let page = 0;
-  const out = [];
-
-  while (true) {
-    const u = new URL(`${RAINDROP_API}/raindrops/${collectionId}`);
-    u.searchParams.set("perpage", String(perPage));
-    u.searchParams.set("page", String(page));
-    u.searchParams.set("sort", "-created");
-    if (searchQuery) u.searchParams.set("search", searchQuery);
-
-    const res = await fetch(u.toString(), {
-      headers: { Authorization: `Bearer ${RAINDROP_TOKEN}`, Accept: "application/json" }
-    });
-    if (!res.ok) throw new Error(`Raindrop ${collectionId} failed: ${res.status} ${await res.text()}`);
-
-    const json = await res.json();
-    const items = json.items ?? [];
-    if (!items.length) break;
-
-    for (const it of items) {
-      out.push({
-        id: `raindrop:${it._id}`,
-        title: it.title ?? "(untitled)",
-        url: it.link ?? null,
-        sourceType: "raindrop",
-        collection: it.collection?.title ?? String(collectionId),
-        tags: it.tags ?? [],
-        publishedAt: it.created ?? it.lastUpdate ?? new Date().toISOString(),
-        thumbnail: it.cover ?? null
-      });
-    }
-
-    if (sinceISO) {
-      const oldest = items[items.length - 1]?.created;
-      if (oldest && new Date(oldest) < new Date(sinceISO)) break;
-    }
-    page += 1;
-  }
+function uniqBy(arr, keyOf) {
+  const seen = new Set(); const out = [];
+  for (const it of arr) { const k = keyOf(it); if (k && !seen.has(k)) { seen.add(k); out.push(it); } }
   return out;
 }
 
-/* ───────── YouTube ───────── */
-async function resolveChannelIdFromHandle(handle) {
-  if (!YOUTUBE_API_KEY) throw new Error("YOUTUBE_API_KEY is not configured");
+/* ------------------ State ------------------ */
+async function loadState() { return loadJson(STATE_FILE, { completedOnce: {} }); }
+async function saveState(state) { await saveJson(STATE_FILE, state); }
 
-  const q = handle.startsWith("@") ? handle : `@${handle}`;
-  const u = new URL(`${YT_API}/search`);
-  u.searchParams.set("part", "snippet");
-  u.searchParams.set("q", q);
-  u.searchParams.set("type", "channel");
-  u.searchParams.set("maxResults", "1");
-  u.searchParams.set("key", YOUTUBE_API_KEY);
+/* ------------------ Raindrop ------------------ */
+const RAINDROP_TOKEN = process.env.RAINDROP_TOKEN;
+async function fetchAllRaindropsInCollection(collectionId) {
+  if (!RAINDROP_TOKEN) throw new Error("RAINDROP_TOKEN missing");
+  const perPage = 100;
+  let page = 0, items = [], keepGoing = true;
 
-  const res = await fetch(u.toString());
-  if (!res.ok) throw new Error(`YouTube handle search failed: ${res.status} ${await res.text()}`);
-  const json = await res.json();
-  const ch = json.items?.[0]?.snippet?.channelId || json.items?.[0]?.id?.channelId;
-  if (!ch) throw new Error(`Channel not found for handle ${handle}`);
-  return ch;
+  while (keepGoing) {
+    page += 1;
+    const url = `https://api.raindrop.io/rest/v1/raindrops/${collectionId}?perpage=${perPage}&page=${page}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${RAINDROP_TOKEN}` }});
+    if (!res.ok) throw new Error(`Raindrop ${collectionId} page ${page}: ${res.status} ${await res.text()}`);
+    const json = await res.json();
+    const batch = json?.items ?? [];
+    items = items.concat(batch);
+    keepGoing = batch.length === perPage;
+  }
+  return items.map(x => ({
+    canonicalId: `rd:${x._id}`,
+    id: `rd:${x._id}`,
+    title: x.title || x.domain || "(untitled)",
+    url: x.link,
+    sourceType: "raindrop",
+    publishedAt: x.created,
+    thumbnail: x.cover || null,
+    tags: Array.isArray(x.tags) ? x.tags : [],
+    collection: String(collectionId)
+  }));
 }
 
-async function fetchChannelVideos({ channelId, sinceISO }) {
+/* ------------------ YouTube ------------------ */
+const YT_KEY = process.env.YOUTUBE_API_KEY;
+async function ytGetJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`YouTube error: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+async function fetchPlaylistItems(playlistId) {
+  if (!YT_KEY) throw new Error("YOUTUBE_API_KEY missing");
   const out = [];
-  let pageToken = null;
-
+  let pageToken = "";
   do {
-    const u = new URL(`${YT_API}/search`);
-    u.searchParams.set("part", "snippet");
-    u.searchParams.set("channelId", channelId);
-    u.searchParams.set("type", "video");
-    u.searchParams.set("order", "date");
-    if (sinceISO) u.searchParams.set("publishedAfter", sinceISO);
-    u.searchParams.set("maxResults", "50");
-    u.searchParams.set("key", YOUTUBE_API_KEY);
-    if (pageToken) u.searchParams.set("pageToken", pageToken);
-
-    const res = await fetch(u.toString());
-    if (!res.ok) throw new Error(`YouTube channel videos failed: ${res.status} ${await res.text()}`);
-
-    const json = await res.json();
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${encodeURIComponent(playlistId)}&maxResults=50&key=${YT_KEY}${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const json = await ytGetJson(url);
+    for (const it of json.items ?? []) {
+      const vid = it.contentDetails?.videoId;
+      const sn = it.snippet ?? {};
+      out.push({
+        canonicalId: `yt:${vid}`,
+        id: `yt:${vid}`,
+        title: sn.title || "(untitled)",
+        url: vid ? `https://www.youtube.com/watch?v=${vid}` : null,
+        sourceType: "youtube-playlist",
+        publishedAt: sn.publishedAt || it.contentDetails?.videoPublishedAt || new Date().toISOString(),
+        thumbnail: sn.thumbnails?.default?.url ?? null,
+        tags: []
+      });
+    }
+    pageToken = json.nextPageToken ?? "";
+  } while (pageToken);
+  return out;
+}
+async function resolveChannelIdFromHandle(handle) {
+  if (!YT_KEY) throw new Error("YOUTUBE_API_KEY missing");
+  // Try the “search channels by query” approach (handles resolve fine)
+  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(handle)}&key=${YT_KEY}`;
+  const json = await ytGetJson(url);
+  const id = json.items?.[0]?.id?.channelId;
+  if (!id) throw new Error(`Unable to resolve channel for handle: ${handle}`);
+  return id;
+}
+async function fetchChannelItems(handle, publishedAfterISO) {
+  if (!YT_KEY) throw new Error("YOUTUBE_API_KEY missing");
+  const channelId = await resolveChannelIdFromHandle(handle);
+  const out = [];
+  let pageToken = "";
+  do {
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&channelId=${channelId}&order=date&maxResults=50&key=${YT_KEY}` +
+      (publishedAfterISO ? `&publishedAfter=${encodeURIComponent(publishedAfterISO)}` : "") +
+      (pageToken ? `&pageToken=${pageToken}` : "");
+    const json = await ytGetJson(url);
     for (const it of json.items ?? []) {
       const vid = it.id?.videoId;
       const sn = it.snippet ?? {};
-      if (!vid) continue;
       out.push({
-        id: `youtube:video:${vid}`,
-        title: sn.title ?? "(untitled)",
-        url: `https://www.youtube.com/watch?v=${vid}`,
+        canonicalId: `yt:${vid}`,
+        id: `yt:${vid}`,
+        title: sn.title || "(untitled)",
+        url: vid ? `https://www.youtube.com/watch?v=${vid}` : null,
         sourceType: "youtube-channel",
-        publishedAt: sn.publishedAt ?? new Date().toISOString(),
-        thumbnail: sn.thumbnails?.high?.url ?? sn.thumbnails?.default?.url ?? null,
-        tags: [],
+        publishedAt: sn.publishedAt || new Date().toISOString(),
+        thumbnail: sn.thumbnails?.default?.url ?? null,
+        tags: []
       });
     }
-    pageToken = json.nextPageToken ?? null;
+    pageToken = json.nextPageToken ?? "";
   } while (pageToken);
-
   return out;
 }
 
-async function fetchPlaylistItems({ playlistId, sinceISO }) {
-  const out = [];
-  let pageToken = null;
-
-  do {
-    const u = new URL(`${YT_API}/playlistItems`);
-    u.searchParams.set("part", "snippet");
-    u.searchParams.set("playlistId", playlistId);
-    u.searchParams.set("maxResults", "50");
-    u.searchParams.set("key", YOUTUBE_API_KEY);
-    if (pageToken) u.searchParams.set("pageToken", pageToken);
-
-    const res = await fetch(u.toString());
-    if (!res.ok) throw new Error(`YouTube playlistItems failed: ${res.status} ${await res.text()}`);
-
-    const json = await res.json();
-    for (const it of json.items ?? []) {
-      const sn = it.snippet ?? {};
-      const vid = sn.resourceId?.videoId;
-      if (!vid) continue;
-
-      if (sinceISO && sn.publishedAt && new Date(sn.publishedAt) < new Date(sinceISO)) {
-        continue;
-      }
-
-      out.push({
-        id: `youtube:playlist:${playlistId}:${vid}`,
-        title: sn.title ?? "(untitled)",
-        url: `https://www.youtube.com/watch?v=${vid}`,
-        sourceType: "youtube-playlist",
-        publishedAt: sn.publishedAt ?? new Date().toISOString(),
-        thumbnail: sn.thumbnails?.high?.url ?? sn.thumbnails?.default?.url ?? null,
-        tags: [],
-      });
-    }
-    pageToken = json.nextPageToken ?? null;
-  } while (pageToken);
-
-  return out;
+/* ------------------ Curated run helper ------------------ */
+async function createCuratedRun(items) {
+  const dayDir = new Date().toISOString().slice(0, 10);
+  const stampDir = `${Date.now()}`;
+  const itemsPath = path.join(CURATED_ROOT, dayDir, stampDir, "items.json");
+  await saveJson(itemsPath, { generatedAt: new Date().toISOString(), items });
+  return { dayDir, stampDir, itemsPath };
 }
 
-/* ───────── RSS ───────── */
-async function fetchRssFeed({ id, url, sinceISO }) {
-  const feed = await rss.parseURL(url);
-  const out = [];
-  for (const it of feed.items ?? []) {
-    const pub = it.isoDate || it.pubDate || null;
-    if (sinceISO && pub && new Date(pub) < new Date(sinceISO)) continue;
-    out.push({
-      id: `rss:${id}:${Buffer.from(it.link ?? it.guid ?? it.title ?? "").toString("base64url")}`,
-      title: it.title ?? "(untitled)",
-      url: it.link ?? null,
-      sourceType: "rss",
-      publishedAt: pub ?? new Date().toISOString(),
-      thumbnail: null,
-      tags: [],
-    });
-  }
-  return out;
-}
-
-/* ───────── Main ───────── */
+/* ------------------ Main ingest ------------------ */
 export async function ingest() {
-  const sources = await loadSources();
+  const sources = await loadJson(SOURCES_FILE, null);
+  if (!sources) { log("No sources.json found; skip ingest"); return; }
   const state = await loadState();
-  const kb = await loadKnowledge();
-  const newItems = [];
+  const kb = await loadJson(KNOWLEDGE_FILE, { generatedAt: new Date().toISOString(), items: [] });
 
-  /* Raindrop */
-  if (sources.raindrop?.collections?.length) {
-    if (!RAINDROP_TOKEN) log("RAINDROP_TOKEN missing; skipping Raindrop");
-    for (const c of sources.raindrop.collections ?? []) {
-      if (c.mode === "pause") continue;
-      const onceKey = `raindrop-${c.id}`;
-      if (c.mode === "once" && state.completedOnce[onceKey]) continue;
+  let newItems = [];
 
-      const sinceISO =
-        c.window ? windowToSinceISO(c.window)
-                 : (sources.raindrop.defaultWindow ? windowToSinceISO(sources.raindrop.defaultWindow) : null);
+  /* ---- Raindrop collections ---- */
+  for (const c of (sources.raindrop?.collections ?? [])) {
+    if (c.mode === "pause") continue;
+    const onceKey = `raindrop-${c.id}`;
+    if (c.mode === "once" && state.completedOnce[onceKey]) continue;
 
-      const raw = await fetchRaindropCollection({ collectionId: c.id, sinceISO });
-      for (const it of raw) {
-        const item = { ...it, collection: normalizeCollection(c.name ?? it.collection) };
-        pushIfNew(kb.items, item, newItems);
-      }
+    const all = await fetchAllRaindropsInCollection(c.id);
+    let pulled = all;
 
-      if (c.mode === "once") state.completedOnce[onceKey] = true;
+    // If not the initial once-pull, filter to last window (daily by default)
+    if (state.completedOnce[onceKey] || c.mode !== "once") {
+      const since = isoFromWindow(sources.raindrop?.defaultWindow || "1d");
+      pulled = all.filter(x => !x.publishedAt || new Date(x.publishedAt) >= new Date(since));
     }
+
+    newItems = newItems.concat(pulled);
+    if (c.mode === "once") state.completedOnce[onceKey] = true;
   }
 
-  /* YouTube playlists */
-  if (sources.youtube?.playlists?.length) {
-    if (!YOUTUBE_API_KEY) log("YOUTUBE_API_KEY missing; skipping YouTube playlists");
-    for (const p of sources.youtube.playlists ?? []) {
-      if (p.mode === "pause") continue;
-      const onceKey = `yt-playlist-${p.id}`;
-      if (p.mode === "once" && state.completedOnce[onceKey]) continue;
+  /* ---- YouTube playlists ---- */
+  for (const p of (sources.youtube?.playlists ?? [])) {
+    if (p.mode === "pause") continue;
+    const onceKey = `yt-playlist-${p.id}`;
+    if (p.mode === "once" && state.completedOnce[onceKey]) continue;
 
-      const sinceISO =
-        p.window ? windowToSinceISO(p.window)
-                 : (sources.youtube.defaultWindow ? windowToSinceISO(sources.youtube.defaultWindow) : null);
+    const items = await fetchPlaylistItems(p.id);
+    // If this isn’t the first time, just take recent entries (playlists rarely need daily filter,
+    // but we keep it small: use last 7 days when not once)
+    const filtered = (p.mode === "once" && !state.completedOnce[onceKey])
+      ? items
+      : items.filter(x => new Date(x.publishedAt) >= new Date(isoFromWindow("7d")));
 
-      const items = await fetchPlaylistItems({ playlistId: p.id, sinceISO });
-      for (const it of items) pushIfNew(kb.items, it, newItems);
-
-      if (p.mode === "once") state.completedOnce[onceKey] = true;
-    }
+    newItems = newItems.concat(filtered);
+    if (p.mode === "once") state.completedOnce[onceKey] = true;
   }
 
-  /* YouTube channels */
-  if (sources.youtube?.channels?.length) {
-    if (!YOUTUBE_API_KEY) log("YOUTUBE_API_KEY missing; skipping YouTube channels");
-    for (const ch of sources.youtube.channels ?? []) {
-      if (ch.mode === "pause") continue;
+  /* ---- YouTube channels ---- */
+  for (const ch of (sources.youtube?.channels ?? [])) {
+    if (ch.mode === "pause") continue;
+    const weeklyKey = `yt-channel-weekly-${ch.handle}`;
+    let since = sources.youtube?.defaultWindow || "1d";
 
-      const weeklyKey = `yt-channel-weekly-${ch.handle}`;
-      let sinceISO;
-      if (ch.mode === "weekly-once") {
-        if (state.completedOnce[weeklyKey]) {
-          sinceISO = windowToSinceISO(sources.youtube.defaultWindow ?? "1d");
-        } else {
-          sinceISO = windowToSinceISO("7d");
-        }
-      } else {
-        sinceISO = ch.window ? windowToSinceISO(ch.window) : windowToSinceISO(sources.youtube.defaultWindow ?? "1d");
-      }
-
-      const channelId = await resolveChannelIdFromHandle(ch.handle);
-      const vids = await fetchChannelVideos({ channelId, sinceISO });
-      for (const it of vids) pushIfNew(kb.items, it, newItems);
-
-      if (ch.mode === "weekly-once" && !state.completedOnce[weeklyKey]) {
-        state.completedOnce[weeklyKey] = true;
-      }
+    if (!state.completedOnce[weeklyKey] && ch.mode === "weekly-once") {
+      since = "7d"; // first run: pull last 7d
+      state.completedOnce[weeklyKey] = true; // next runs fall back to daily
     }
+
+    const items = await fetchChannelItems(ch.handle, isoFromWindow(since));
+    newItems = newItems.concat(items);
   }
 
-  /* RSS */
-  for (const f of sources.rss ?? []) {
-    if (f.mode === "pause") continue;
-    const onceKey = `rss-${f.id}`;
-    if (f.mode === "once" && state.completedOnce[onceKey]) continue;
+  // Dedup by canonicalId (or URL if missing)
+  newItems = uniqBy(newItems, it => it.canonicalId || it.url);
 
-    const sinceISO = f.window ? windowToSinceISO(f.window) : null;
-    try {
-      const items = await fetchRssFeed({ id: f.id, url: f.url, sinceISO });
-      for (const it of items) pushIfNew(kb.items, it, newItems);
-      if (f.mode === "once") state.completedOnce[onceKey] = true;
-    } catch (err) {
-      log(`RSS fetch failed for ${f.id}`, { error: err.message });
-    }
-  }
-
-  /* Save */
-  state.lastCount = newItems.length;
-
-  if (newItems.length) {
-    log(`Ingested ${newItems.length} new items`, { newItems: newItems.length });
-    await saveKnowledge(kb);     // updates knowledge.json for the site immediately
+  if (newItems.length === 0) {
+    log("Ingest found no new items; still writing empty curated run for downstream steps.");
   } else {
-    log("No new items found this run");
+    log("Ingested new items", { count: newItems.length });
   }
 
+  // Update knowledge.json (append new, dedup)
+  const merged = uniqBy([...newItems, ...kb.items], it => it.canonicalId || it.url);
+  await saveJson(KNOWLEDGE_FILE, { generatedAt: new Date().toISOString(), items: merged });
+
+  // Always write a curated run with *just* the new items for this run
+  const run = await createCuratedRun(newItems);
+
+  // Persist state
   await saveState(state);
+
+  log("Ingest complete", { curatedRun: `${run.dayDir}/${run.stampDir}`, newItems: newItems.length });
 }
 
-/* Run direct */
+/* ------------------ Run direct ------------------ */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  ingest().catch((err) => {
-    console.error("Ingest failed", err);
-    process.exitCode = 1;
-  });
+  ingest().catch(err => { console.error("Ingest failed", err); process.exitCode = 1; });
 }
