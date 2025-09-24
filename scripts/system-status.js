@@ -3,78 +3,44 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
-const STATUS_FILE = path.join(CACHE_DIR, "system-status.json");
+const ROOT = path.resolve(__dirname, "..");
+const CACHE = path.join(ROOT, "data", "cache");
 
-/* ---------- Helpers ---------- */
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
+async function loadJson(p, fb = null) {
+  try { return JSON.parse(await fs.readFile(p, "utf8")); }
+  catch { return fb; }
 }
+async function ensureDir(p) { await fs.mkdir(p, { recursive: true }); }
 
-async function loadJson(file, fallback) {
-  try {
-    return JSON.parse(await fs.readFile(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-
-async function saveJson(file, data) {
-  await ensureDir(path.dirname(file));
-  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
-}
-
-function log(message, ctx = {}) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] ${message}`, Object.keys(ctx).length ? ctx : "");
-}
-
-/* ---------- Main ---------- */
-export async function buildSystemStatus(partialStats = {}) {
-  const prev = await loadJson(STATUS_FILE, {
+export async function buildSystemStatus() {
+  const state = await loadJson(path.join(CACHE, "pipeline-state.json"), { completed: [] });
+  const summaries = await loadJson(path.join(CACHE, "summaries.json"), { enriched: 0 });
+  const status = {
     generatedAt: new Date().toISOString(),
     pipeline: {
-      lastRunStep: null,
-      completedSteps: [],
-      stats: { ingested: 0, enriched: 0, classified: 0, digests: 0, published: 0 },
+      lastRunStep: state.completed[state.completed.length - 1] ?? null,
+      completedSteps: state.completed,
+      stats: {
+        ingested: (await loadJson(path.join(CACHE, "ingest-stats.json"), { count: 0 })).count,
+        enriched: summaries.enriched ?? 0,
+        classified: (await loadJson(path.join(CACHE, "classify-stats.json"), { count: 0 })).count,
+        digests: (await loadJson(path.join(CACHE, "digest-stats.json"), { count: 0 })).count,
+        published: (await loadJson(path.join(CACHE, "publish-stats.json"), { count: 0 })).count
+      }
     },
-    knowledgebase: null,
-    digest: null,
-  });
-
-  const stats = {
-    ...prev.pipeline.stats,
-    ...Object.fromEntries(
-      Object.entries(partialStats).map(([k, v]) => [
-        k,
-        typeof v === "number" ? (prev.pipeline.stats[k] ?? 0) + v : v,
-      ])
-    ),
+    knowledgebase: await loadJson(path.join(ROOT, "data", "knowledge.json"), null),
+    digest: await loadJson(path.join(CACHE, "last-digest.json"), null)
   };
 
-  const updated = {
-    ...prev,
-    generatedAt: new Date().toISOString(),
-    pipeline: {
-      ...prev.pipeline,
-      lastRunStep: partialStats.lastRunStep ?? prev.pipeline.lastRunStep,
-      completedSteps: Array.from(
-        new Set([...prev.pipeline.completedSteps, ...(partialStats.completedSteps ?? [])])
-      ),
-      stats,
-    },
-  };
-
-  await saveJson(STATUS_FILE, updated);
-  log("✅ System status written", { file: path.relative(ROOT_DIR, STATUS_FILE), stats });
-  return updated;
+  await ensureDir(CACHE);
+  const out = path.join(CACHE, "system-status.json");
+  await fs.writeFile(out, JSON.stringify(status, null, 2), "utf8");
+  console.log(`✅ System status written ${out}`, status);
 }
 
-/* ---------- Run direct ---------- */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  buildSystemStatus().catch((err) => {
-    console.error("System status update failed", err);
+  buildSystemStatus().catch((e) => {
+    console.error("System-status failed", e);
     process.exitCode = 1;
   });
 }
