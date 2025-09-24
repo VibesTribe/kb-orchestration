@@ -122,10 +122,17 @@ export async function ingest() {
 
   /* ---- Raindrop ---- */
   for (const c of sources.raindrop.collections ?? []) {
-    if (c.mode === "pause") continue;
+    if (c.mode === "pause") {
+      log("Skipping Raindrop (paused)", { collection: c.id });
+      continue;
+    }
 
-    if (c.mode === "once" && state.completedOnce[`raindrop-${c.id}`]) continue;
+    if (c.mode === "once" && state.completedOnce[`raindrop-${c.id}`]) {
+      log("Skipping Raindrop (already ingested once)", { collection: c.id });
+      continue;
+    }
 
+    log("Fetching Raindrop items", { collection: c.id, mode: c.mode });
     const items = await fetchRaindropItems(c.id, c.window ?? sources.raindrop.defaultWindow);
     for (const item of items) {
       item.collection = normalizeCollection(c.name ?? c.id);
@@ -140,9 +147,16 @@ export async function ingest() {
 
   /* ---- YouTube playlists ---- */
   for (const p of sources.youtube.playlists ?? []) {
-    if (p.mode === "pause") continue;
-    if (p.mode === "once" && state.completedOnce[`yt-playlist-${p.id}`]) continue;
+    if (p.mode === "pause") {
+      log("Skipping YouTube playlist (paused)", { playlist: p.id });
+      continue;
+    }
+    if (p.mode === "once" && state.completedOnce[`yt-playlist-${p.id}`]) {
+      log("Skipping YouTube playlist (already ingested once)", { playlist: p.id });
+      continue;
+    }
 
+    log("Fetching YouTube playlist items", { playlist: p.id, mode: p.mode });
     const items = await fetchYoutubePlaylistItems(p.id);
     for (const item of items) {
       if (!kb.items.find((i) => i.id === item.id)) {
@@ -156,10 +170,13 @@ export async function ingest() {
 
   /* ---- YouTube channels ---- */
   for (const c of sources.youtube.channels ?? []) {
-    if (c.mode === "pause") continue;
+    if (c.mode === "pause") {
+      log("Skipping YouTube channel (paused)", { handle: c.handle });
+      continue;
+    }
 
     if (c.mode === "weekly-once" && state.completedOnce[`yt-channel-weekly-${c.handle}`]) {
-      // already did 7-day pull → fall back to daily
+      log("Weekly once already done → falling back to daily", { handle: c.handle });
       const items = await fetchYoutubeChannelItems(c.handle, sources.youtube.defaultWindow);
       for (const item of items) {
         if (!kb.items.find((i) => i.id === item.id)) {
@@ -168,6 +185,7 @@ export async function ingest() {
         }
       }
     } else {
+      log("Fetching YouTube channel items", { handle: c.handle, mode: c.mode });
       const items = await fetchYoutubeChannelItems(c.handle, c.window ?? sources.youtube.defaultWindow);
       for (const item of items) {
         if (!kb.items.find((i) => i.id === item.id)) {
@@ -181,9 +199,16 @@ export async function ingest() {
 
   /* ---- RSS feeds ---- */
   for (const f of sources.rss ?? []) {
-    if (f.mode === "pause") continue;
-    if (f.mode === "once" && state.completedOnce[`rss-${f.id}`]) continue;
+    if (f.mode === "pause") {
+      log("Skipping RSS (paused)", { feed: f.id });
+      continue;
+    }
+    if (f.mode === "once" && state.completedOnce[`rss-${f.id}`]) {
+      log("Skipping RSS (already ingested once)", { feed: f.id });
+      continue;
+    }
 
+    log("Fetching RSS feed items", { feed: f.id, mode: f.mode });
     const items = await fetchRssItems(f.id, f.url, f.window);
     for (const item of items) {
       if (!kb.items.find((i) => i.id === item.id)) {
