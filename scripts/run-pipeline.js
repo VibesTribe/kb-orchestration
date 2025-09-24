@@ -1,64 +1,34 @@
-name: run-pipeline
+// scripts/run-pipeline.js
+import { runIngest } from "./ingest.js";
+import { runEnrich } from "./enrich.js";
+import { runClassify } from "./classify.js";
+import { runDigest } from "./digest.js";
+import { runPublish } from "./publish.js";
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 1 * * *" # daily at 01:00 UTC
+async function main() {
+  console.log("🚀 Starting pipeline...");
 
-jobs:
-  pipeline:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
+  try {
+    console.log("📥 Step 1: Ingest");
+    await runIngest();
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    console.log("✨ Step 2: Enrich");
+    await runEnrich();
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "npm"
+    console.log("🏷️ Step 3: Classify");
+    await runClassify();
 
-      - name: Install dependencies
-        run: |
-          npm config set registry https://registry.npmjs.org/
-          npm cache clean --force
-          npm install --prefer-online --no-audit --no-fund
+    console.log("📰 Step 4: Digest");
+    await runDigest();
 
-      - name: Refresh Raindrop token (optional; safe if missing refresh)
-        env:
-          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
-          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
-          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
-        run: node scripts/refresh-raindrop.js || true
+    console.log("📤 Step 5: Publish");
+    await runPublish();
 
-      - name: Run pipeline
-        env:
-          # External APIs
-          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    console.log("✅ Pipeline completed successfully!");
+  } catch (err) {
+    console.error("❌ Pipeline failed:", err);
+    process.exit(1);
+  }
+}
 
-          # Email
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
-          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
-          BREVO_TO: ${{ secrets.BREVO_TO }}
-        run: node scripts/run-pipeline.js
-
-      - name: Upload artifacts (status + curated + digest + publish)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kb-output
-          path: |
-            data/cache/**
-            data/curated/**
-            data/digest/**
-            data/publish/**
-            data/knowledge.json
-          if-no-files-found: ignore
+main();
