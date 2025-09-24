@@ -46,7 +46,10 @@ export async function buildSystemStatus(partialStats = {}) {
   const stats = {
     ...prev.pipeline.stats,
     ...Object.fromEntries(
-      Object.entries(partialStats).map(([k, v]) => [k, (prev.pipeline.stats[k] ?? 0) + v])
+      Object.entries(partialStats).map(([k, v]) => [
+        k,
+        typeof v === "number" ? (prev.pipeline.stats[k] ?? 0) + v : v,
+      ])
     ),
   };
 
@@ -71,4 +74,7 @@ export async function buildSystemStatus(partialStats = {}) {
 /* ---------- Run direct ---------- */
 if (import.meta.url === `file://${process.argv[1]}`) {
   buildSystemStatus().catch((err) => {
-    console.
+    console.error("System status update failed", err);
+    process.exitCode = 1;
+  });
+}
