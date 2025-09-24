@@ -1,5 +1,5 @@
 // scripts/publish.js
-// Handles local publish artifacts and delegates upstream sync to kb-sync.js
+// Handles local publish artifacts. Sync to GitHub is handled later in kb-sync.js.
 
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -10,21 +10,14 @@ const ROOT = path.resolve(__dirname, "..");
 const DATA = path.join(ROOT, "data");
 const PUBLISH_ROOT = path.join(DATA, "publish");
 
-/**
- * Save a JSON object to a file
- */
-async function saveJson(filePath, obj) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(obj, null, 2), "utf8");
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
 }
 
-/**
- * Copy file into publish dir with timestamped folder
- */
 async function copyToPublish(localPath, subdir = "") {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outDir = path.join(PUBLISH_ROOT, new Date().toISOString().slice(0, 10), stamp, subdir);
-  await fs.mkdir(outDir, { recursive: true });
+  await ensureDir(outDir);
   const fileName = path.basename(localPath);
   const outPath = path.join(outDir, fileName);
   await fs.copyFile(localPath, outPath);
@@ -33,12 +26,15 @@ async function copyToPublish(localPath, subdir = "") {
 }
 
 /**
- * Main publish routine
- * - Copies knowledge.json
- * - Copies curated/latest if present
- * - Leaves upstream sync to run-pipeline.js (via kb-sync.js)
+ * Publish artifacts:
+ * - knowledge.json
+ * - curated/latest/*
+ * - digest files (if provided by digest.js)
+ *
+ * @param {object} options
+ *   { digestResult?: { files: { json, txt, html }, dir, payload } }
  */
-export async function publish() {
+export async function publish({ digestResult } = {}) {
   console.log("📤 Starting publish step...");
 
   // 1. Copy knowledge.json
@@ -58,6 +54,19 @@ export async function publish() {
     }
   } catch {
     console.log("ℹ️ No curated/latest directory found, skipping");
+  }
+
+  // 3. Copy digest artifacts if provided
+  if (digestResult?.files) {
+    for (const [label, filePath] of Object.entries(digestResult.files)) {
+      try {
+        await copyToPublish(filePath, "digest");
+      } catch {
+        console.warn(`⚠️ Failed to publish digest ${label}`, filePath);
+      }
+    }
+  } else {
+    console.log("ℹ️ No digestResult provided, skipping digest publish");
   }
 
   console.log("✅ Publish step complete (local artifacts only).");
