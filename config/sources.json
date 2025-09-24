@@ -12,13 +12,61 @@
     "channels": [
       { "handle": "indydevdan", "mode": "weekly-once" },
       { "handle": "ColeMedin", "mode": "weekly-once" },
-      { "handle": "iamseankochel", "mode": "weekly-once" }
-      // … add all your other channels here
+      { "handle": "iamseankochel", "mode": "weekly-once" },
+      { "handle": "GosuCoder", "mode": "weekly-once" },
+      { "handle": "DavidOndrej", "mode": "weekly-once" },
+      { "handle": "vrsen", "mode": "weekly-once" },
+      { "handle": "soloswiftcrafter", "mode": "weekly-once" },
+      { "handle": "DevelopersDigest", "mode": "weekly-once" },
+      { "handle": "matthew_berman", "mode": "weekly-once" },
+      { "handle": "MervinPraison", "mode": "weekly-once" },
+      { "handle": "theailifestyle", "mode": "weekly-once" },
+      { "handle": "AllAboutAI", "mode": "weekly-once" },
+      { "handle": "code4AI", "mode": "weekly-once" },
+      { "handle": "JulianGoldieSEO", "mode": "weekly-once" },
+      { "handle": "AIJasonZ", "mode": "weekly-once" },
+      { "handle": "BMadCode", "mode": "weekly-once" },
+      { "handle": "nicksaraev", "mode": "weekly-once" },
+      { "handle": "AILABS-393", "mode": "weekly-once" },
+      { "handle": "nateherk", "mode": "weekly-once" },
+      { "handle": "AIOriented", "mode": "weekly-once" },
+      { "handle": "adrianchinghc", "mode": "weekly-once" },
+      { "handle": "AICodeKing", "mode": "weekly-once" },
+      { "handle": "TheAIAutomators", "mode": "weekly-once" },
+      { "handle": "airevolutionx", "mode": "weekly-once" },
+      { "handle": "NateBJones", "mode": "weekly-once" },
+      { "handle": "MetalSole", "mode": "weekly-once" },
+      { "handle": "AI-GPTWorkshop", "mode": "weekly-once" },
+      { "handle": "CreatorMagicAI", "mode": "weekly-once" },
+      { "handle": "TechWithTim", "mode": "weekly-once" },
+      { "handle": "Mark_Kashef", "mode": "weekly-once" },
+      { "handle": "AIDailyBrief", "mode": "weekly-once" },
+      { "handle": "convex-dev", "mode": "weekly-once" },
+      { "handle": "d-squared70", "mode": "weekly-once" },
+      { "handle": "engineerprompt", "mode": "weekly-once" },
+      { "handle": "fahdmirza", "mode": "weekly-once" },
+      { "handle": "AlexFinnOfficial", "mode": "weekly-once" },
+      { "handle": "TheMetaverseGuy", "mode": "weekly-once" },
+      { "handle": "DarrenBuildsAI", "mode": "weekly-once" },
+      { "handle": "1littlecoder", "mode": "weekly-once" },
+      { "handle": "aiexplained-official", "mode": "weekly-once" },
+      { "handle": "aiadvantage", "mode": "weekly-once" },
+      { "handle": "code4A", "mode": "weekly-once" },
+      { "handle": "rabbitmetrics", "mode": "weekly-once" },
+      { "handle": "WhatsAI", "mode": "weekly-once" },
+      { "handle": "intheworldofai", "mode": "weekly-once" },
+      { "handle": "DenDev", "mode": "weekly-once" },
+      { "handle": "theai.thing_1", "mode": "weekly-once" }
     ]
   },
   "rss": [
     { "id": "huggingface", "url": "https://huggingface.co/blog/feed.xml", "mode": "pause" },
-    { "id": "deepmind", "url": "https://deepmind.google/blog/rss.xml", "mode": "pause" }
-    // … rest also paused
+    { "id": "deepmind", "url": "https://deepmind.google/blog/rss.xml", "mode": "pause" },
+    { "id": "hackernoon-ai", "url": "https://hackernoon.com/tagged/ai/feed", "mode": "pause" },
+    { "id": "techxplore-ml", "url": "https://techxplore.com/rss-feed/machine-learning-ai-news/", "mode": "pause" },
+    { "id": "synthedia", "url": "https://synthedia.substack.com/feed", "mode": "pause" },
+    { "id": "algorithmic-bridge", "url": "https://www.thealgorithmicbridge.com/feed", "mode": "pause" },
+    { "id": "aihub", "url": "https://aihub.org/feed/?cat=-473", "mode": "pause" }
   ]
 }
+
