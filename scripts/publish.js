@@ -2,201 +2,110 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSystemStatus } from "./system-status.js";
 
-/* ------------------ Paths ------------------ */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
-const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
-const OUTPUT_ROOT = path.join(ROOT_DIR, "data", "publish");
+const DATA_DIR = path.join(ROOT_DIR, "data");
+const PUBLISH_DIR = path.join(DATA_DIR, "publish");
+const KNOWLEDGE_FILE = path.join(DATA_DIR, "knowledge.json");
 
-/* ------------------ Config ------------------ */
-const TARGET_REPO = "VibesTribe/knowledgebase"; // fixed, no env var
-const GITHUB_TOKEN = process.env.KNOWLEDGEBASE_TOKEN;
+const GITHUB_API = "https://api.github.com";
+const OWNER = process.env.GITHUB_REPOSITORY?.split("/")[0];
+const REPO = process.env.GITHUB_REPOSITORY?.split("/")[1];
+const TOKEN = process.env.ACTIONS_PAT;
 
-/* ------------------ Helpers ------------------ */
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
+function log(message, ctx = {}) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${message}`, Object.keys(ctx).length ? ctx : "");
 }
-async function loadJson(filePath, fallback = null) {
+
+/* ---------- Helpers ---------- */
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+async function loadJson(file, fallback) {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(await fs.readFile(file, "utf8"));
   } catch {
     return fallback;
   }
 }
-async function listDirectories(parent) {
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
-}
-function log(message, context = {}) {
-  const ts = new Date().toISOString();
-  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
-  console.log(`[${ts}] ${message}${payload}`);
-}
 
-/* ------------------ Main publish step ------------------ */
-export async function publish() {
-  const curatedRun = await getLatestRun(CURATED_ROOT);
-  if (!curatedRun) {
-    log("No curated data found; skip publish");
-    return;
-  }
+/* ---------- GitHub Push ---------- */
+async function commitJsonToRepo(filePath, destPath, message) {
+  if (!TOKEN) throw new Error("ACTIONS_PAT is not configured");
+  if (!OWNER || !REPO) throw new Error("GITHUB_REPOSITORY not set");
 
-  await ensureDir(OUTPUT_ROOT);
+  const content = await fs.readFile(filePath, "utf8");
+  const base64Content = Buffer.from(content).toString("base64");
 
-  const knowledgeJson = buildKnowledgeJson(curatedRun.content);
-  const graphJson = buildGraphJson(curatedRun.content);
-  const systemStatus = { generatedAt: new Date().toISOString(), status: "ok" };
-
-  const publishDir = path.join(OUTPUT_ROOT, curatedRun.dayDir, curatedRun.stampDir);
-  await ensureDir(publishDir);
-
-  const knowledgePath = path.join(publishDir, "knowledge.json");
-  const graphPath = path.join(publishDir, "knowledge.graph.json");
-  const statusPath = path.join(publishDir, "system-status.json");
-
-  await fs.writeFile(knowledgePath, JSON.stringify(knowledgeJson, null, 2), "utf8");
-  await fs.writeFile(graphPath, JSON.stringify(graphJson, null, 2), "utf8");
-  await fs.writeFile(statusPath, JSON.stringify(systemStatus, null, 2), "utf8");
-
-  log("Publish artifacts prepared", {
-    dir: publishDir,
-    items: knowledgeJson.items.length,
-  });
-
-  if (!GITHUB_TOKEN) {
-    log("KNOWLEDGEBASE_TOKEN missing; skipping push to repo");
-    return;
-  }
-
-  await pushToRepo([
-    { filename: "knowledge.json", content: knowledgeJson },
-    { filename: "knowledge.graph.json", content: graphJson },
-    { filename: "system-status.json", content: systemStatus },
-  ]);
-}
-
-/* ------------------ Builders ------------------ */
-function buildKnowledgeJson(curated) {
-  const items = (curated.items ?? []).map((item) => ({
-    id: item.canonicalId ?? item.id,
-    title: item.title,
-    url: item.url,
-    summary: item.summary,
-    description: item.description,
-    publishedAt: item.publishedAt,
-    sourceType: item.sourceType,
-    thumbnail: item.thumbnail ?? null,
-    tags: item.tags ?? [],
-    projects: item.projects,
-    assignedProjects: item.assignedProjects,
-  }));
-  return { generatedAt: curated.generatedAt, items };
-}
-function buildGraphJson(curated) {
-  const nodes = new Map();
-  const edges = [];
-  const addNode = (id, node) => {
-    if (!id) return;
-    if (!nodes.has(id)) nodes.set(id, { id, ...node });
-  };
-  const addEdge = (source, target, edge) => {
-    if (!source || !target) return;
-    edges.push({ source, target, ...edge });
-  };
-
-  for (const item of curated.items ?? []) {
-    const itemId = item.canonicalId ?? item.id;
-    addNode(itemId, {
-      type: "bookmark",
-      label: item.title ?? "(untitled)",
-      url: item.url ?? null,
-      sourceType: item.sourceType,
-      thumbnail: item.thumbnail ?? null,
-      publishedAt: item.publishedAt ?? null,
-    });
-    for (const assignment of item.projects ?? []) {
-      const projectId = `project:${assignment.projectKey ?? assignment.project}`;
-      addNode(projectId, { type: "project", label: assignment.project });
-      addEdge(itemId, projectId, { type: "relevant_to", reason: assignment.reason });
-    }
-    for (const tag of item.tags ?? []) {
-      const tagId = `tag:${tag.toLowerCase()}`;
-      addNode(tagId, { type: "tag", label: tag });
-      addEdge(itemId, tagId, { type: "tagged_with" });
-    }
-  }
-
-  return { generatedAt: curated.generatedAt, nodes: [...nodes.values()], edges };
-}
-
-/* ------------------ GitHub push ------------------ */
-async function pushToRepo(files) {
-  for (const { filename, content } of files) {
-    const apiUrl = `https://api.github.com/repos/${TARGET_REPO}/contents/${filename}`;
-    await commitFile(apiUrl, content, filename);
-  }
-}
-async function commitFile(apiUrl, jsonContent, filename) {
-  const headers = {
-    Authorization: `Bearer ${GITHUB_TOKEN}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": "kb-orchestration",
-  };
-
-  const existing = await fetch(apiUrl, { headers });
+  // Does the file already exist?
+  const url = `${GITHUB_API}/repos/${OWNER}/${REPO}/contents/${destPath}`;
   let sha = null;
-  if (existing.status === 200) {
-    const existingJson = await existing.json();
-    sha = existingJson.sha;
-  } else if (existing.status !== 404) {
-    const text = await existing.text();
-    throw new Error(`Failed to load ${filename}: ${existing.status} ${text}`);
+  const getResp = await fetch(url, {
+    headers: { Authorization: `Bearer ${TOKEN}`, "User-Agent": "kb-orchestration" },
+  });
+  if (getResp.ok) {
+    const json = await getResp.json();
+    sha = json.sha;
   }
 
-  const response = await fetch(apiUrl, {
+  const putResp = await fetch(url, {
     method: "PUT",
-    headers,
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "User-Agent": "kb-orchestration",
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
-      message: `chore: update ${filename}`,
-      content: Buffer.from(JSON.stringify(jsonContent, null, 2)).toString("base64"),
+      message,
+      content: base64Content,
       sha,
+      branch: "main",
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(
-      `Failed to push ${filename}: ${response.status} ${await response.text()}`
-    );
+  if (!putResp.ok) {
+    throw new Error(`Failed to push ${destPath}: ${putResp.status} ${await putResp.text()}`);
   }
+  log("Committed to repo", { destPath });
 }
 
-/* ------------------ Helpers ------------------ */
-async function getLatestRun(root) {
-  const dayDirs = await listDirectories(root);
-  if (!dayDirs.length) return null;
-  dayDirs.sort().reverse();
-  for (const dayDir of dayDirs) {
-    const stampDirs = await listDirectories(path.join(root, dayDir));
-    stampDirs.sort().reverse();
-    for (const stampDir of stampDirs) {
-      const itemsPath = path.join(root, dayDir, stampDir, "items.json");
-      const content = await loadJson(itemsPath, null);
-      if (content) return { dayDir, stampDir, content };
-    }
+/* ---------- Main ---------- */
+export async function publish() {
+  const dayDir = new Date().toISOString().slice(0, 10);
+  const stampDir = Date.now().toString();
+  const publishDir = path.join(PUBLISH_DIR, dayDir, stampDir);
+  await ensureDir(publishDir);
+
+  const knowledge = await loadJson(KNOWLEDGE_FILE, null);
+  if (!knowledge) {
+    log("No knowledge.json found; skipping publish");
+    return;
   }
-  return null;
+
+  const localCopy = path.join(publishDir, "knowledge.json");
+  await fs.writeFile(localCopy, JSON.stringify(knowledge, null, 2), "utf8");
+
+  // Push to repo
+  await commitJsonToRepo(
+    localCopy,
+    "data/knowledge.json",
+    `Publish knowledge.json ${dayDir} ${stampDir}`
+  );
+
+  // Update system status
+  await buildSystemStatus({ published: knowledge.items?.length || 0 });
+
+  log("Publish complete", { dir: publishDir, items: knowledge.items?.length || 0 });
 }
 
-/* ------------------ Run direct ------------------ */
+/* ---------- Run direct ---------- */
 if (import.meta.url === `file://${process.argv[1]}`) {
   publish().catch((err) => {
-    console.error("Publish step failed", err);
+    console.error("Publish failed", err);
     process.exitCode = 1;
   });
 }
