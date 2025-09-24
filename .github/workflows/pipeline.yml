@@ -11,6 +11,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -22,7 +23,10 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          npm config set registry https://registry.npmjs.org/
+          npm cache clean --force
+          npm install --prefer-online --no-audit --no-fund
 
       - name: Refresh Raindrop token (optional; safe if missing refresh)
         env:
