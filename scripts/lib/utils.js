@@ -1,62 +1,42 @@
-import "dotenv/config";
+// scripts/lib/utils.js
+// Common filesystem + JSON helpers for pipeline scripts.
+
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const INGEST_ROOT = path.join(ROOT_DIR, "data", "ingest");
-
-/**
- * Ensure a directory exists (recursively).
- */
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
+// Ensure a directory exists
+export async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
 }
 
-/**
- * Save JSON to a file (checkpoint style).
- */
-async function saveJsonCheckpoint(filePath, data) {
+// Load JSON from file, or return fallback
+export async function loadJson(filePath, fallback = null) {
+  try {
+    const text = await fs.readFile(filePath, "utf8");
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+// Save JSON to file with pretty formatting
+export async function saveJsonCheckpoint(filePath, data) {
   await ensureDir(path.dirname(filePath));
-  const json = JSON.stringify(data, null, 2);
-  await fs.writeFile(filePath, json, "utf8");
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
-/**
- * Ingest step — demo placeholder.
- */
-export async function ingest() {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dayDir = new Date().toISOString().split("T")[0];
-  const ingestDir = path.join(INGEST_ROOT, dayDir, timestamp);
-  await ensureDir(ingestDir);
-
-  const items = [
-    {
-      id: "demo1",
-      title: "Demo Ingest Item",
-      url: "https://example.com/demo",
-      sourceType: "demo",
-      publishedAt: new Date().toISOString(),
-    },
-  ];
-
-  await saveJsonCheckpoint(path.join(ingestDir, "items.json"), {
-    items,
-    generatedAt: new Date().toISOString(),
-  });
-
-  console.log("Ingest complete:", {
-    itemCount: items.length,
-    dir: ingestDir,
-  });
+// Save plain text to file
+export async function saveTextCheckpoint(filePath, content) {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, content, "utf8");
 }
 
-// Run if invoked directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  ingest().catch((err) => {
-    console.error("Ingest failed", err);
-    process.exitCode = 1;
-  });
+// List subdirectories under a path
+export async function listDirectories(root) {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
 }
