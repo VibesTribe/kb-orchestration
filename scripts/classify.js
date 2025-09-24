@@ -2,12 +2,12 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { callOpenRouter } from "./openrouter.js";
 
 /* ------------------ Utilities ------------------ */
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
-
 async function loadJson(filePath, fallback = null) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -16,12 +16,10 @@ async function loadJson(filePath, fallback = null) {
     return fallback;
   }
 }
-
 async function saveJson(filePath, data) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
 }
-
 async function loadText(filePath) {
   try {
     return await fs.readFile(filePath, "utf8");
@@ -29,7 +27,6 @@ async function loadText(filePath) {
     return "";
   }
 }
-
 async function listDirectories(parent) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
@@ -38,7 +35,6 @@ async function listDirectories(parent) {
     return [];
   }
 }
-
 function log(message, context = {}) {
   const ts = new Date().toISOString();
   const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
@@ -57,7 +53,6 @@ const STATE_FILE = path.join(CACHE_ROOT, "classify-state.json");
 async function loadState() {
   return (await loadJson(STATE_FILE, { completedItems: [] }));
 }
-
 async function saveState(state) {
   await saveJson(STATE_FILE, state);
 }
@@ -106,45 +101,74 @@ async function getLatestCuratedRun() {
 }
 
 /* ------------------ Classification logic ------------------ */
-function classifyItemAgainstProject(item, project) {
-  const text = [
-    item.title ?? "",
-    item.summary ?? "",
-    item.description ?? "",
-    (item.tags ?? []).join(" "),
-  ].join("\n");
+async function classifyItemAgainstProject(item, project) {
+  const systemPrompt = `
+You are a precise classification agent. 
+Classify the following item for the project "${project.name}".
+Return JSON with keys: usefulness (HIGH|MODERATE|ARCHIVE), reason, nextSteps.
+Be strict and consistent. Use the PRD and usefulness criteria provided.
+`;
 
-  const context = [
-    project.summary ?? "",
-    (project.objectives ?? []).join("\n"),
-    (project.techStack ?? []).join("\n"),
-    project.prd ?? "",
-    project.changelog ?? "",
-  ].join("\n");
+  const userPrompt = `
+Project Summary:
+${project.summary}
 
-  let usefulness = "archive";
-  let reason = "Does not appear directly relevant.";
-  let nextSteps = null;
+Objectives:
+${(project.objectives ?? []).join("\n")}
 
-  const highCriteria = (project.usefulnessCriteria?.high ?? []);
-  const moderateCriteria = (project.usefulnessCriteria?.moderate ?? []);
+Tech Stack:
+${(project.techStack ?? []).join(", ")}
 
-  if (highCriteria.some((c) => text.toLowerCase().includes(c.toLowerCase()))) {
-    usefulness = "high";
-    reason = "Matches high usefulness criteria.";
-    nextSteps = "Evaluate for direct integration or adoption.";
-  } else if (moderateCriteria.some((c) => text.toLowerCase().includes(c.toLowerCase()))) {
-    usefulness = "moderate";
-    reason = "Matches moderate usefulness criteria.";
-    nextSteps = "Monitor for near-term adaptation.";
+Usefulness Criteria:
+High: ${(project.usefulnessCriteria?.high ?? []).join(" | ")}
+Moderate: ${(project.usefulnessCriteria?.moderate ?? []).join(" | ")}
+Archive: ${(project.usefulnessCriteria?.archive ?? []).join(" | ")}
+
+Prompt Hint:
+${project.promptHints?.classification ?? ""}
+
+PRD:
+${project.prd?.slice(0, 4000) ?? ""}
+
+Changelog (recent lines):
+${project.changelog?.slice(0, 20).join("\n") ?? ""}
+
+---
+Item to classify:
+Title: ${item.title}
+Summary: ${item.summary ?? ""}
+Description: ${item.description ?? ""}
+Tags: ${(item.tags ?? []).join(", ")}
+URL: ${item.url ?? ""}
+`;
+
+  const { content } = await callOpenRouter(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    { maxTokens: 300 }
+  );
+
+  try {
+    const parsed = JSON.parse(content);
+    return {
+      project: project.name ?? project.key,
+      projectKey: project.key,
+      usefulness: parsed.usefulness?.toUpperCase() ?? "ARCHIVE",
+      reason: parsed.reason ?? "No reason given",
+      nextSteps: parsed.nextSteps ?? "",
+    };
+  } catch {
+    // fallback if LLM didn’t return JSON
+    return {
+      project: project.name ?? project.key,
+      projectKey: project.key,
+      usefulness: "ARCHIVE",
+      reason: "LLM response parse failed",
+      nextSteps: "",
+    };
   }
-
-  return {
-    project: project.name ?? project.key,
-    usefulness,
-    reason,
-    nextSteps,
-  };
 }
 
 /* ------------------ Main classify step ------------------ */
@@ -165,23 +189,24 @@ export async function classify() {
   const items = curatedRun.content.items ?? [];
 
   for (const item of items) {
-    if (state.completedItems.includes(item.id)) {
-      continue; // already classified
-    }
+    if (state.completedItems.includes(item.id)) continue; // already classified
 
     const assignments = [];
     for (const project of projects) {
-      const classification = classifyItemAgainstProject(item, project);
+      const classification = await classifyItemAgainstProject(item, project);
       assignments.push(classification);
     }
 
-    item.assignedProjects = assignments;
-
+    item.projects = assignments; // keep consistent with digest.js
     state.completedItems.push(item.id);
+
+    // Save incrementally
+    await saveJson(curatedRun.itemsPath, curatedRun.content);
     await saveState(state);
+
+    log("Classified item", { id: item.id, title: item.title });
   }
 
-  await saveJson(curatedRun.itemsPath, curatedRun.content);
   log("Classification complete", { itemCount: items.length });
 }
 
