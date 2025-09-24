@@ -22,14 +22,11 @@ jobs:
           node-version: 20
           cache: "npm"
 
-      - name: Hardened Install dependencies
+      - name: Clean and Install dependencies (no cache)
         run: |
+          rm -rf node_modules package-lock.json ~/.npm
           npm config set registry https://registry.npmjs.org/
-          npm cache clean --force
-          npm config set prefer-online true
-          npm config set fetch-retries 5
-          npm config set fetch-retry-maxtimeout 120000
-          npm install --no-audit --no-fund --force
+          npm install --no-audit --no-fund
 
       - name: Refresh Raindrop token (optional; safe if missing refresh)
         env:
