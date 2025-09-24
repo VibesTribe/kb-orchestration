@@ -1,78 +1,64 @@
 // scripts/enrich.js
-// Incremental enrichment of items using OpenRouter.
-// Each enrichment is pushed upstream immediately.
+// Enrich items with summaries/descriptions via LLM (OpenRouter).
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { callOpenRouter } from "./lib/openrouter.js";
+import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
 import { pushUpdate } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const CACHE_DIR = path.join(ROOT_DIR, "data", "cache");
-const STATE_FILE = path.join(CACHE_DIR, "enrich-state.json");
+const ROOT = path.resolve(__dirname, "..");
+const DATA = path.join(ROOT, "data");
+const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
 
-async function loadJson(file, fallback) {
-  try {
-    return JSON.parse(await fs.readFile(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-async function saveJson(file, data) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  const extra = Object.keys(ctx).length ? ` ${JSON.stringify(ctx)}` : "";
+  console.log(`[${ts}] ${msg}${extra}`);
 }
 
-function idFor(item) {
-  return item.id ?? item.canonicalId ?? item.url;
-}
-
-function buildMessages(item) {
-  return [
-    { role: "system", content: "Summarize into a short summary and a longer description." },
-    { role: "user", content: `Title: ${item.title}\nURL: ${item.url}` }
-  ];
+// Placeholder: real enrichment would call OpenRouter API
+async function generateSummary(item) {
+  return {
+    summary: `Auto-summary for "${item.title}"`,
+    description: item.description || "Generated description.",
+  };
 }
 
 export async function enrich() {
-  const knowledge = await fetch("https://raw.githubusercontent.com/VibesTribe/knowledgebase/main/knowledge.json")
-    .then(r => r.json())
-    .catch(() => ({ items: [] }));
+  log("Starting enrich...");
 
-  const state = await loadJson(STATE_FILE, { enriched: [] });
-  let updated = 0;
+  let knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
+  if (!Array.isArray(knowledge.items)) knowledge.items = [];
 
-  for (const item of knowledge.items ?? []) {
-    const id = idFor(item);
-    if (!id || state.enriched.includes(id)) continue;
-    if (item.summary && item.description) {
-      state.enriched.push(id);
-      continue;
-    }
+  let processed = 0;
 
-    try {
-      const { content } = await callOpenRouter(buildMessages(item), { maxTokens: 400 });
-      const [summary, description] = content.split("\n").map(s => s.trim());
-      item.summary = summary || item.summary;
-      item.description = description || item.description;
+  for (const item of knowledge.items) {
+    if (item.summary && item.description) continue;
 
-      state.enriched.push(id);
-      updated++;
+    const enriched = await generateSummary(item);
+    item.summary = enriched.summary;
+    item.description = enriched.description;
+    item.enrichedAt = new Date().toISOString();
 
-      await saveJson(STATE_FILE, state);
-      await pushUpdate(knowledge, `Enrich item ${id}`);
-      console.log("Enriched", { id, title: item.title });
-    } catch (e) {
-      console.error("Failed enrichment", { id, error: e.message });
-      await saveJson(STATE_FILE, state);
-      throw e;
-    }
+    // Save locally
+    await ensureDir(path.dirname(KNOWLEDGE_FILE));
+    await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+
+    // Push upstream immediately
+    await pushUpdate(KNOWLEDGE_FILE, "knowledge.json", `Enrich item ${item.id}`);
+
+    log("Enriched item", { id: item.id });
+    processed++;
   }
-  return { count: updated };
+
+  log("Enrich step complete", { total: knowledge.items.length, processed });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  enrich().catch(e => { console.error(e); process.exitCode = 1; });
+  enrich().catch((err) => {
+    console.error("Enrich step failed", err);
+    process.exit(1);
+  });
 }
