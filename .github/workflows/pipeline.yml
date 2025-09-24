@@ -1,17 +1,16 @@
-name: Orchestrate Knowledgebase
+name: run-pipeline
 
 on:
   workflow_dispatch:
   schedule:
-    # 11:00 PM (previous day) Waterloo time ≈ 03:00 UTC
-    - cron: "0 3 * * *"
-    # 09:00 AM Waterloo time ≈ 13:00 UTC
-    - cron: "0 13 * * *"
+    - cron: "0 1 * * *" # daily at 01:00 UTC
 
 jobs:
-  run-pipeline:
+  pipeline:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,150 +22,39 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
-      # 🔄 Refresh Raindrop token first
-      - name: Refresh Raindrop token
+      - name: Refresh Raindrop token (optional; safe if missing refresh)
         env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
-        run: node scripts/refresh-raindrop.js
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+        run: node scripts/refresh-raindrop.js || true
 
-      - name: Execute pipeline (attempt 1)
+      - name: Run pipeline
         env:
+          # External APIs
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+          # Email
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
           BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
           BREVO_TO: ${{ secrets.BREVO_TO }}
-          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
-          KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
-        run: npm run pipeline
-        continue-on-error: true
+        run: node scripts/run-pipeline.js
 
-      # ✅ Upload artifacts (first run)
-      - name: Upload logs
+      - name: Upload artifacts (status + curated + digest + publish)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pipeline-logs
-          path: logs/
-          if-no-files-found: ignore
-
-      - name: Upload summaries cache
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summaries-cache
-          path: data/cache/summaries.json
-          if-no-files-found: ignore
-
-      - name: Upload pipeline state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-state
-          path: data/cache/pipeline-state.json
-          if-no-files-found: ignore
-
-      - name: Upload system status
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: system-status
-          path: data/cache/system-status.json
-          if-no-files-found: ignore
-
-      - name: Upload curated data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: curated-data
-          path: data/curated/
-          if-no-files-found: ignore
-
-  retry-if-failed:
-    needs: run-pipeline
-    if: failure()
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Refresh Raindrop token
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}
-          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
-          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
-          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TARGET_SECRET: RAINDROP_TOKEN
-        run: node scripts/refresh-raindrop.js
-
-      - name: Execute pipeline (retry)
-        env:
-          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
-          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
-          BREVO_TO: ${{ secrets.BREVO_TO }}
-          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
-          KNOWLEDGEBASE_REPO: ${{ vars.KNOWLEDGEBASE_REPO }}
-        run: npm run pipeline
-
-      # ✅ Upload artifacts (retry overwrites)
-      - name: Upload logs (retry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-logs
-          path: logs/
-          if-no-files-found: ignore
-
-      - name: Upload summaries cache (retry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summaries-cache
-          path: data/cache/summaries.json
-          if-no-files-found: ignore
-
-      - name: Upload pipeline state (retry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-state
-          path: data/cache/pipeline-state.json
-          if-no-files-found: ignore
-
-      - name: Upload system status (retry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: system-status
-          path: data/cache/system-status.json
-          if-no-files-found: ignore
-
-      - name: Upload curated data (retry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: curated-data
-          path: data/curated/
+          name: kb-output
+          path: |
+            data/cache/**
+            data/curated/**
+            data/digest/**
+            data/publish/**
+            data/knowledge.json
           if-no-files-found: ignore
