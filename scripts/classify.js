@@ -1,122 +1,98 @@
-// scripts/classify.js
-import { loadJson, saveJsonCheckpoint, ensureDir, listDirectories } from "./lib/utils.js";
-import { pushUpdate } from "./lib/kb-sync.js";
-import { callOpenRouter } from "./lib/openrouter.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { callWithRotation } from "./lib/openrouter.js";
+import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const DATA = path.join(ROOT, "data");
-const CACHE = path.join(DATA, "cache");
-const CLASSIFY_STATE = path.join(CACHE, "classify-state.json");
-const KNOW_FILE = path.join(DATA, "knowledge.json");
-const PROJECTS = path.join(ROOT, "projects");
+const KNOWLEDGE_FILE = path.join(ROOT, "data", "knowledge.json");
+const STATE_FILE = path.join(ROOT, "data/cache/classify-state.json");
+const PROJECTS_DIR = path.join(ROOT, "projects");
 
 function log(msg, ctx = {}) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] ${msg}`, ctx);
-}
-
-async function loadKnowledge() {
-  const obj = await loadJson(KNOW_FILE, { items: [] });
-  if (!Array.isArray(obj.items)) obj.items = [];
-  return obj;
-}
-
-async function saveKnowledge(knowledge) {
-  await ensureDir(path.dirname(KNOW_FILE));
-  await saveJsonCheckpoint(KNOW_FILE, knowledge);
-  await pushUpdate(KNOW_FILE, "knowledge.json", "Classify update");
-}
-
-async function loadState() {
-  await ensureDir(path.dirname(CLASSIFY_STATE));
-  const obj = await loadJson(CLASSIFY_STATE, { processedIds: [] });
-  if (!Array.isArray(obj.processedIds)) obj.processedIds = [];
-  return obj;
-}
-
-async function saveState(state) {
-  await ensureDir(path.dirname(CLASSIFY_STATE));
-  await saveJsonCheckpoint(CLASSIFY_STATE, state);
-}
-
-async function loadActiveProjects() {
-  const dirs = await listDirectories(PROJECTS);
-  const ret = [];
-  for (const d of dirs) {
-    const config = await loadJson(path.join(PROJECTS, d, "project.json"), null);
-    if (config && config.active !== false) {
-      ret.push({ key: d, name: config.name, usefulnessCriteria: config.usefulnessCriteria });
-    }
-  }
-  return ret;
+  console.log(`[${new Date().toISOString()}] ${msg}`, ctx);
 }
 
 export async function classify() {
-  log("Starting classify...");
-  const knowledge = await loadKnowledge();
-  const state = await loadState();
-  const projects = await loadActiveProjects();
+  const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
+  const state = await loadJson(STATE_FILE, { processed: [] });
 
-  let processed = 0;
-  let skipped = 0;
+  // load active projects
+  const projects = await loadProjects();
+  const activeProjects = projects.filter(p => p.active);
+
+  let classifiedCount = 0;
 
   for (const item of knowledge.items) {
-    if (state.processedIds.includes(item.id)) {
-      skipped++;
-      continue;
-    }
+    if (state.processed.includes(item.id)) continue;
 
-    if (!item.summary) {
-      // can't classify if no summary
-      state.processedIds.push(item.id);
-      continue;
-    }
-
-    const assignments = [];
-
-    for (const project of projects) {
+    for (const project of activeProjects) {
       try {
-        const { text, model } = await callOpenRouter(
-          `Classify this item for project ${project.name}. Summary: ${item.summary}`
+        const { text, model } = await callWithRotation(
+          `Classify usefulness for project: ${project.name}\n\nItem:\nTitle: ${item.title}\nSummary: ${item.summary ?? ""}\nDescription: ${item.description ?? ""}\n\nRespond with one of:\n- HIGH (critical)\n- MODERATE (useful but optional)\n- LOW (not useful)\nAlso explain why briefly, and suggest next steps if useful.`,
+          "classify"
         );
-        const parsed = JSON.parse(text);
-        if (parsed.usefulness === "HIGH" || parsed.usefulness === "MODERATE") {
-          assignments.push({
-            projectKey: project.key,
-            project: project.name,
-            usefulness: parsed.usefulness,
-            reason: parsed.reason || "",
-            nextSteps: parsed.nextSteps || "",
-            model,
-          });
-        }
+
+        item.projects = item.projects ?? [];
+        item.projects.push({
+          project: project.name,
+          projectKey: project.key,
+          usefulness: parseUsefulness(text),
+          reason: extractReason(text),
+          nextSteps: extractNextSteps(text),
+          modelUsed: model
+        });
+
+        state.processed.push(item.id);
+        await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+        await saveJsonCheckpoint(STATE_FILE, state);
+
+        log("Classified item", { id: item.id, project: project.name, model });
+        classifiedCount++;
       } catch (err) {
-        log("Project classification failed", { project: project.key, error: err.message });
+        log("Failed to classify item", { id: item.id, project: project.name, error: err.message });
       }
     }
-
-    if (assignments.length > 0) {
-      item.projects = assignments;
-      processed++;
-    } else {
-      // no relevant project
-    }
-
-    state.processedIds.push(item.id);
-    await saveKnowledge(knowledge);
-    await saveState(state);
-    log("Classified item", { id: item.id, projects: assignments.map(a => a.projectKey) });
   }
 
-  log("Classify done", { total: knowledge.items.length, processed, skipped });
+  log("Classify step complete", { total: knowledge.items.length, classified: classifiedCount });
+}
+
+async function loadProjects() {
+  const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
+  const projects = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const configPath = path.join(PROJECTS_DIR, entry.name, "project.json");
+    try {
+      const text = await fs.readFile(configPath, "utf8");
+      const config = JSON.parse(text);
+      projects.push({ key: entry.name, ...config });
+    } catch {}
+  }
+  return projects;
+}
+
+function parseUsefulness(text) {
+  if (/high/i.test(text)) return "HIGH";
+  if (/moderate/i.test(text)) return "MODERATE";
+  return "LOW";
+}
+
+function extractReason(text) {
+  const match = text.match(/why(?: it matters)?:?\s*(.+)/i);
+  return match ? match[1].trim() : "";
+}
+
+function extractNextSteps(text) {
+  const match = text.match(/next steps?:?\s*(.+)/i);
+  return match ? match[1].trim() : "";
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  classify().catch((err) => {
-    console.error("classify failure", err);
-    process.exit(1);
+  classify().catch(err => {
+    console.error("Classify step failed", err);
+    process.exitCode = 1;
   });
 }
