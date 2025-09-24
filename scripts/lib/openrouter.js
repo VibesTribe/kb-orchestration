@@ -1,65 +1,70 @@
 // scripts/lib/openrouter.js
-// Lightweight OpenRouter client — uses global fetch (Node 18+/20+).
-// Exports callOpenRouter(messages, options)
+import fetch from "node-fetch";
+import { loadJson } from "./utils.js";
 
-const DEFAULT_MODEL_CHAIN = [
-  "xai/grok-4-f",
-  "deepseek/deepseek-v3.1",
-  "nvidia/nemotron-nano-9b-v2",
-  "mistralai/mistral-7b-instruct:latest"
-];
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-const REFERRER = process.env.OPENROUTER_REFERRER ?? "https://github.com/VibesTribe/kb-orchestration";
-const TITLE = process.env.OPENROUTER_TITLE ?? "kb-orchestration";
+if (!OPENROUTER_API_KEY) {
+  console.warn("Warning: OPENROUTER_API_KEY not set!");
+}
 
-export async function callOpenRouter(messages, { model, maxTokens = 220, temperature = 0.2 } = {}) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured");
+/**
+ * Try to call OpenRouter with a given model and prompt
+ * Returns { text, model } or throws error.
+ */
+export async function callOpenRouterModel(model, prompt, options = {}) {
+  const body = {
+    model,
+    prompt,
+    // ... other options or settings
+  };
 
-  // Build chain: explicit model first, then env chain (if set), then defaults
-  const explicit = model ? [model] : [];
-  const primaryEnv = process.env.OPENROUTER_MODEL ? process.env.OPENROUTER_MODEL.split(",").map(s => s.trim()).filter(Boolean) : [];
-  const chainEnv = process.env.OPENROUTER_MODEL_CHAIN ? process.env.OPENROUTER_MODEL_CHAIN.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      // Add any required headers (e.g. OpenRouter’s policy headers)
+    },
+    body: JSON.stringify(body),
+  });
 
-  const modelChain = [...new Set([...explicit, ...primaryEnv, ...chainEnv, ...DEFAULT_MODEL_CHAIN])];
-
-  let lastError = null;
-  for (const m of modelChain) {
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": REFERRER,
-          "X-Title": TITLE
-        },
-        body: JSON.stringify({
-          model: m,
-          messages,
-          max_tokens: maxTokens,
-          temperature
-        })
-      });
-
-      if (!res.ok) {
-        const body = await res.text().catch(() => "<no body>");
-        lastError = new Error(`Model ${m} failed: ${res.status} ${body}`);
-        continue;
-      }
-
-      const json = await res.json().catch(() => null);
-      const content = json?.choices?.[0]?.message?.content?.trim();
-      if (!content) {
-        lastError = new Error(`Model ${m} returned empty content`);
-        continue;
-      }
-
-      return { content, model: m, raw: json };
-    } catch (err) {
-      lastError = err;
-    }
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`OpenRouter ${model} failed: ${resp.status} ${txt}`);
   }
 
-  throw lastError ?? new Error("All OpenRouter attempts failed");
+  const j = await resp.json();
+  const resultText = j.choices?.[0]?.message?.content;
+  if (typeof resultText !== "string") {
+    throw new Error(`OpenRouter ${model} returned no content`);
+  }
+
+  return { text: resultText, model };
+}
+
+/**
+ * Rotate through configured models until one succeeds.
+ * Reads model list from config/models.json under key "models".
+ */
+export async function callOpenRouter(prompt, options = {}) {
+  const cfg = await loadJson("config/models.json", null);
+  const models = (cfg && Array.isArray(cfg.models)) ? cfg.models : [];
+  if (!models.length) {
+    throw new Error("No models configured in config/models.json");
+  }
+
+  let lastError = null;
+  for (const m of models) {
+    try {
+      const res = await callOpenRouterModel(m, prompt, options);
+      return res;
+    } catch (err) {
+      lastError = err;
+      console.warn(`Model ${m} failed: ${err.message}`);
+      continue;
+    }
+  }
+  // All models failed
+  throw lastError;
 }
