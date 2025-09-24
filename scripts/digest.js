@@ -1,175 +1,223 @@
+// scripts/digest.js
+// Build digest artifacts from latest curated run and active projects.
+// Saves outputs under data/digest/<day>/<stamp>/ and optionally sends Brevo email
+// Uses only BREVO_* secrets you already listed.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
-const DATA = path.join(ROOT, "data");
-const CURATED = path.join(DATA, "curated");
-const DIGEST_ROOT = path.join(DATA, "digest");
-const PROJECTS_ROOT = path.join(ROOT, "projects");
-const CACHE = path.join(DATA, "cache");
-const STATS_FILE = path.join(CACHE, "digest-stats.json");
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
+const DIGEST_ROOT = path.join(ROOT_DIR, "data", "digest");
+const PROJECTS_ROOT = path.join(ROOT_DIR, "projects");
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
 const BREVO_FROM_NAME = process.env.BREVO_FROM_NAME ?? "Knowledgebase";
 const BREVO_TO = process.env.BREVO_TO ?? "";
 
-function log(m,c={}){ console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length?c:""); }
-async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
-async function loadJson(p, fb){ try{ return JSON.parse(await fs.readFile(p,"utf8")); } catch { return fb; } }
-async function saveJson(p, v){ await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v,null,2), "utf8"); }
-async function loadText(p){ try { return await fs.readFile(p,"utf8"); } catch { return ""; } }
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+}
 
-async function latestCuratedRun() {
-  const days = await fs.readdir(CURATED).catch(()=>[]);
-  days.sort().reverse();
-  for (const d of days) {
-    const dPath = path.join(CURATED, d);
-    const stamps = await fs.readdir(dPath).catch(()=>[]);
-    stamps.sort().reverse();
-    for (const s of stamps) {
-      const f = path.join(dPath, s, "items.json");
-      const json = await loadJson(f, null);
-      if (json) return { dayDir: d, stampDir: s, path: f, content: json };
+async function loadJson(file, fallback) {
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+async function saveText(file, text) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, text, "utf8");
+}
+
+async function saveJson(file, data) {
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+}
+
+function log(msg, ctx = {}) {
+  const ts = new Date().toISOString();
+  const payload = Object.keys(ctx).length ? ` ${JSON.stringify(ctx)}` : "";
+  console.log(`[${ts}] ${msg}${payload}`);
+}
+
+async function listDirectories(parent) {
+  try {
+    const entries = await fs.readdir(parent, { withFileTypes: true });
+    return entries.filter(e => e.isDirectory()).map(e => e.name);
+  } catch {
+    return [];
+  }
+}
+
+async function loadProjects() {
+  const entries = await listDirectories(PROJECTS_ROOT);
+  const projects = [];
+  for (const dir of entries) {
+    const configPath = path.join(PROJECTS_ROOT, dir, "project.json");
+    const config = await loadJson(configPath, null);
+    if (!config) continue;
+    const status = (config.status ?? "active").toLowerCase();
+    projects.push({ key: dir, status, changelog: (await fs.readFile(path.join(PROJECTS_ROOT, dir, "changelog.md"), "utf8").catch(() => "")).split(/\r?\n/).map(l => l.trim()).filter(Boolean), ...config });
+  }
+  return projects;
+}
+
+async function getLatestRun(root) {
+  const dayDirs = await listDirectories(root);
+  if (!dayDirs.length) return null;
+  dayDirs.sort().reverse();
+  for (const dayDir of dayDirs) {
+    const stampDirs = await listDirectories(path.join(root, dayDir));
+    stampDirs.sort().reverse();
+    for (const stampDir of stampDirs) {
+      const itemsPath = path.join(root, dayDir, stampDir, "items.json");
+      const content = await loadJson(itemsPath, null);
+      if (content) return { dayDir, stampDir, itemsPath, content };
     }
   }
   return null;
 }
 
-async function loadProjects() {
-  const dirs = await fs.readdir(PROJECTS_ROOT).catch(()=>[]);
-  const projects = [];
-  for (const dir of dirs) {
-    const cfg = await loadJson(path.join(PROJECTS_ROOT, dir, "project.json"), null);
-    if (!cfg) continue;
-    const changelog = (await loadText(path.join(PROJECTS_ROOT, dir, "changelog.md")))
-      .split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith("#"));
-    projects.push({ key: dir, changelog, ...cfg });
-  }
-  return projects;
+function buildDigestEntry(item, assignment) {
+  const published = item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : null;
+  return {
+    title: item.title ?? "(untitled)",
+    url: item.url ?? null,
+    summary: item.summary ?? item.description ?? "",
+    usefulness: assignment.usefulness,
+    reason: assignment.reason ?? "",
+    nextSteps: assignment.nextSteps ?? "",
+    publishedAt: published,
+    sourceType: item.sourceType ?? "unknown"
+  };
 }
 
-function collectForProject(items, project) {
-  const high = [], moderate = [];
-  for (const item of items ?? []) {
-    const a = (item.projects ?? []).find(x => x.projectKey === project.key || x.project === project.name);
-    if (!a) continue;
-    const published = item.publishedAt
-      ? new Date(item.publishedAt).toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" })
-      : null;
-    const entry = {
-      title: item.title ?? "(untitled)",
-      url: item.url ?? null,
-      summary: item.summary ?? item.description ?? "",
-      usefulness: a.usefulness,
-      reason: a.reason ?? "",
-      nextSteps: a.nextSteps ?? "",
-      publishedAt: published,
-      sourceType: item.sourceType ?? "unknown"
-    };
-    if (a.usefulness === "HIGH") high.push(entry);
-    else if (a.usefulness === "MODERATE") moderate.push(entry);
+function collectItemsForProject(curated, project) {
+  const high = [];
+  const moderate = [];
+  for (const item of curated.items ?? []) {
+    // item.projects could be array of classification objects
+    const assignment = (item.projects ?? []).find(p => p.projectKey === project.key || p.project === project.name);
+    if (!assignment) continue;
+    if (String(assignment.usefulness).toUpperCase() === "HIGH") high.push(buildDigestEntry(item, assignment));
+    else if (String(assignment.usefulness).toUpperCase() === "MODERATE") moderate.push(buildDigestEntry(item, assignment));
   }
   return { high, moderate };
 }
 
-function renderText(payload) {
+function renderTextDigest(payload) {
   const lines = [];
-  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   lines.push("Daily Digest");
   lines.push(dateStr);
-  lines.push(`News You Can Use Today:\n${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`);
   lines.push("");
-  for (const p of payload.projects) {
-    lines.push(p.name);
-    if (p.summary) lines.push(p.summary);
+  lines.push(`News You Can Use Today: ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`);
+  lines.push("");
+  for (const project of payload.projects) {
+    lines.push(project.name);
+    if (project.summary) lines.push(project.summary);
     lines.push("");
-    if (p.high.length) {
+    if (project.high.length) {
       lines.push("Highly Useful");
-      for (const e of p.high) {
-        lines.push(`- ${e.title}`);
-        if (e.summary) lines.push(`  ${e.summary}`);
-        if (e.reason) lines.push(`  Why it matters: ${e.reason}`);
-        if (e.nextSteps) lines.push(`  Next steps: ${e.nextSteps}`);
-        if (e.publishedAt) lines.push(`  Published: ${e.publishedAt}`);
-        if (e.url) lines.push(`  Go to source: ${e.url}`);
+      for (const entry of project.high) {
+        lines.push(`- ${entry.title}`);
+        if (entry.summary) lines.push(`  ${entry.summary}`);
+        if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
+        if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
+        if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
+        if (entry.url) lines.push(`  Go to source: ${entry.url}`);
       }
       lines.push("");
     }
-    if (p.moderate.length) {
+    if (project.moderate.length) {
       lines.push("Moderately Useful");
-      for (const e of p.moderate) {
-        lines.push(`- ${e.title}`);
-        if (e.summary) lines.push(`  ${e.summary}`);
-        if (e.reason) lines.push(`  Why it matters: ${e.reason}`);
-        if (e.nextSteps) lines.push(`  Next steps: ${e.nextSteps}`);
-        if (e.publishedAt) lines.push(`  Published: ${e.publishedAt}`);
-        if (e.url) lines.push(`  Go to source: ${e.url}`);
+      for (const entry of project.moderate) {
+        lines.push(`- ${entry.title}`);
+        if (entry.summary) lines.push(`  ${entry.summary}`);
+        if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
+        if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
+        if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
+        if (entry.url) lines.push(`  Go to source: ${entry.url}`);
       }
       lines.push("");
     }
-    if (p.changelog?.length) {
+    if (project.changelog.length) {
       lines.push("Recent Changelog Notes");
-      for (const note of p.changelog.slice(0,5)) lines.push(`- ${note}`);
+      for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
       lines.push("");
     }
+    lines.push("");
   }
   lines.push("You can still browse all updates:");
   lines.push("View this digest: https://vibestribe.github.io/kb-site/");
   return lines.join("\n");
 }
 
-function renderHtml(payload) {
-  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
-  return `<!DOCTYPE html><html><body>
-  <h1>Daily Digest</h1>
-  <p>${dateStr}</p>
-  <p>${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful</p>
-  ${payload.projects.map(p=>`
-    <h2>${p.name}</h2>
-    ${p.summary?`<p>${p.summary}</p>`:""}
-    ${p.high.map(e=>`<div><strong>HIGH:</strong> ${e.title}</div>`).join("")}
-    ${p.moderate.map(e=>`<div><strong>MODERATE:</strong> ${e.title}</div>`).join("")}
-  `).join("")}
-  <p><a href="https://vibestribe.github.io/kb-site/">View this digest online</a></p>
-  </body></html>`;
+function renderHtmlDigest(payload) {
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const projectHtml = payload.projects.map(p => {
+    const highHtml = p.high.map(e => `<div><strong>HIGH:</strong> <a href="${e.url ?? '#'}">${escapeHtml(e.title)}</a><p>${escapeHtml(e.summary)}</p></div>`).join("");
+    const modHtml = p.moderate.map(e => `<div><strong>MODERATE:</strong> <a href="${e.url ?? '#'}">${escapeHtml(e.title)}</a><p>${escapeHtml(e.summary)}</p></div>`).join("");
+    const changelogHtml = p.changelog.slice(0, 5).map(n => `<li>${escapeHtml(n)}</li>`).join("");
+    return `<section><h2>${escapeHtml(p.name)}</h2>${p.summary ? `<p>${escapeHtml(p.summary)}</p>` : ""}${highHtml}${modHtml}${changelogHtml ? `<h3>Recent Changelog Notes</h3><ul>${changelogHtml}</ul>` : ""}</section>`;
+  }).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Daily Digest</title></head><body><h1>Daily Digest</h1><p>${dateStr}</p><p>${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful</p>${projectHtml}<p><a href="https://vibestribe.github.io/kb-site/">View this digest online</a></p></body></html>`;
+}
+
+function escapeHtml(s) {
+  if (!s) return "";
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
-  if (!BREVO_API_KEY) { log("BREVO_API_KEY missing; skip email"); return; }
-  if (!recipients?.length) { log("BREVO_TO not configured; skip email"); return; }
-
-  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "api-key": BREVO_API_KEY },
-    body: JSON.stringify({
-      sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
-      to: recipients.map(e=>({ email: e })),
-      subject,
-      textContent,
-      htmlContent
-    })
-  });
-  if (!res.ok) throw new Error(`Brevo ${res.status} ${await res.text()}`);
-  log("Digest email sent", { recipients: recipients.length });
+  try {
+    if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY missing");
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "api-key": BREVO_API_KEY },
+      body: JSON.stringify({
+        sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
+        to: recipients.map(email => ({ email })),
+        subject,
+        textContent,
+        htmlContent
+      })
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "<no body>");
+      throw new Error(`Brevo error: ${res.status} ${body}`);
+    }
+    log("Digest email sent", { recipients: recipients.length });
+  } catch (err) {
+    log("Failed to send Brevo email", { error: err.message });
+  }
 }
 
 export async function digest() {
-  const run = await latestCuratedRun();
-  if (!run) { log("No curated data found; skip digest"); await saveJson(STATS_FILE, { count: 0 }); return; }
+  const curatedRun = await getLatestRun(CURATED_ROOT);
+  if (!curatedRun) {
+    log("No curated data found; skip digest");
+    return;
+  }
 
-  const allProjects = await loadProjects();
-  const active = allProjects.filter(p => (p.status||"active")==="active");
+  const projects = await loadProjects();
+  const activeProjects = projects.filter(p => (p.status ?? "active").toLowerCase() === "active");
 
-  const digestDir = path.join(DIGEST_ROOT, run.dayDir, run.stampDir);
+  const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
   await ensureDir(digestDir);
+
   const jsonPath = path.join(digestDir, "digest.json");
   const txtPath = path.join(digestDir, "digest.txt");
   const htmlPath = path.join(digestDir, "digest.html");
 
-  const payload = (await loadJson(jsonPath, null)) || {
+  const digestPayload = {
     generatedAt: new Date().toISOString(),
     subject: "",
     totalHigh: 0,
@@ -177,51 +225,57 @@ export async function digest() {
     projects: []
   };
 
-  for (const proj of active) {
-    if (payload.projects.some(p => p.key === proj.key)) continue;
-    const { high, moderate } = collectForProject(run.content.items, proj);
+  for (const project of activeProjects) {
+    const { high, moderate } = collectItemsForProject(curatedRun.content, project);
     if (!high.length && !moderate.length) continue;
 
-    payload.projects.push({
-      key: proj.key, name: proj.name, summary: proj.summary,
-      high, moderate, changelog: proj.changelog ?? []
+    digestPayload.projects.push({
+      key: project.key,
+      name: project.name ?? project.key,
+      summary: project.summary ?? "",
+      high,
+      moderate,
+      changelog: project.changelog ?? []
     });
-    payload.totalHigh += high.length;
-    payload.totalModerate += moderate.length;
-    payload.subject = `Daily Digest – ${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`;
-
-    await saveJson(jsonPath, payload);
-    await fs.writeFile(txtPath, renderText(payload), "utf8");
-    await fs.writeFile(htmlPath, renderHtml(payload), "utf8");
-    log("Digest checkpoint saved", { project: proj.name });
+    digestPayload.totalHigh += high.length;
+    digestPayload.totalModerate += moderate.length;
   }
 
-  await saveJson(CACHE + "/last-digest.json", payload);
-  await saveJson(STATS_FILE, { count: payload.projects.length });
+  digestPayload.subject = `Daily Digest – ${digestPayload.totalHigh} Highly Useful + ${digestPayload.totalModerate} Moderately Useful`;
 
-  if (payload.projects.length) {
-    const recipients = BREVO_TO.split(/[,;\s]+/).filter(Boolean);
-    try {
-      await sendBrevoEmail({
-        subject: payload.subject,
-        textContent: await fs.readFile(txtPath, "utf8"),
-        htmlContent: await fs.readFile(htmlPath, "utf8"),
-        recipients
-      });
-    } catch (e) {
-      log("Brevo send failed", { error: e.message });
-    }
-  } else {
+  await saveJson(jsonPath, digestPayload);
+  await saveText(txtPath, renderTextDigest(digestPayload));
+  await saveText(htmlPath, renderHtmlDigest(digestPayload));
+
+  log("Digest artifacts prepared", { json: path.relative(ROOT_DIR, jsonPath) });
+
+  // Email send: only if configured and there are items
+  const recipients = (BREVO_TO || "").split(/[,;\s]+/).filter(Boolean);
+  if (!BREVO_API_KEY) {
+    log("BREVO_API_KEY missing; skipping email send");
+    return;
+  }
+  if (!recipients.length) {
+    log("BREVO_TO not configured; skipping email send");
+    return;
+  }
+  if (!digestPayload.projects.length) {
     log("Digest contains no actionable items; skipping email send");
+    return;
   }
+
+  await sendBrevoEmail({
+    subject: digestPayload.subject,
+    textContent: renderTextDigest(digestPayload),
+    htmlContent: renderHtmlDigest(digestPayload),
+    recipients
+  });
 }
 
+// Run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  digest().catch((e)=>{ console.error("Digest failed", e); process.exitCode=1; });
-}
-
-
-/* ------------------ Run direct ------------------ */
-if (import.meta.url === `file://${process.argv[1]}`) {
-  digest().catch(err => { console.error("Digest step failed", err); process.exitCode = 1; });
+  digest().catch(err => {
+    console.error("Digest step failed", err);
+    process.exitCode = 1;
+  });
 }
