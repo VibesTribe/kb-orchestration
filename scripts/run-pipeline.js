@@ -1,74 +1,64 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+name: run-pipeline
 
-import { ingest } from "./ingest.js";
-import { enrich } from "./enrich.js";
-import { classify } from "./classify.js";
-import { digest } from "./digest.js";
-import { publish } from "./publish.js";
-import { buildSystemStatus } from "./system-status.js";
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *" # daily at 01:00 UTC
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
-const CACHE = path.join(ROOT, "data", "cache");
-const STATE_FILE = path.join(CACHE, "pipeline-state.json");
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
 
-function log(msg, ctx = {}) {
-  const ts = new Date().toISOString();
-  const extra = Object.keys(ctx).length ? ` ${JSON.stringify(ctx)}` : "";
-  console.log(`[${ts}] ${msg}${extra}`);
-}
-async function ensureDir(p) { await fs.mkdir(p, { recursive: true }); }
-async function loadState() {
-  try { return JSON.parse(await fs.readFile(STATE_FILE, "utf8")); }
-  catch { return { completed: [] }; }
-}
-async function saveState(s) {
-  await ensureDir(CACHE);
-  await fs.writeFile(STATE_FILE, JSON.stringify(s, null, 2), "utf8");
-}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-export async function runPipeline() {
-  const steps = [
-    { name: "Ingest", fn: ingest },
-    { name: "Enrich", fn: enrich },
-    { name: "Classify", fn: classify },
-    { name: "Digest", fn: digest },
-    { name: "Publish", fn: publish }
-  ];
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
 
-  const state = await loadState();
+      - name: Install dependencies
+        run: |
+          npm config set registry https://registry.npmjs.org/
+          npm cache clean --force
+          npm install --prefer-online --no-audit --no-fund
 
-  for (const step of steps) {
-    if (state.completed.includes(step.name)) {
-      log(`⏩ Skipping ${step.name} (already completed)`);
-      continue;
-    }
-    log(`▶ Starting ${step.name}`);
-    try {
-      await step.fn();
-      state.completed.push(step.name);
-      log(`✅ Completed ${step.name}`);
-    } catch (err) {
-      console.error(`❌ ${step.name} failed`, { error: err?.message });
-      await saveState(state);
-      await buildSystemStatus();
-      throw err;
-    }
-    await saveState(state);
-    await buildSystemStatus();
-  }
+      - name: Refresh Raindrop token (optional; safe if missing refresh)
+        env:
+          RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
+          RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
+          RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+        run: node scripts/refresh-raindrop.js || true
 
-  log("🎉 Pipeline finished successfully");
-  await saveState({ completed: [] }); // reset after a full pass
-  await buildSystemStatus();
-}
+      - name: Run pipeline
+        env:
+          # External APIs
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runPipeline().catch((e) => {
-    console.error("Pipeline failed", e);
-    process.exitCode = 1;
-  });
-}
+          # Email
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_TO: ${{ secrets.BREVO_TO }}
+        run: node scripts/run-pipeline.js
 
+      - name: Upload artifacts (status + curated + digest + publish)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kb-output
+          path: |
+            data/cache/**
+            data/curated/**
+            data/digest/**
+            data/publish/**
+            data/knowledge.json
+          if-no-files-found: ignore
