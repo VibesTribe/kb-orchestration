@@ -1,7 +1,7 @@
 {
   "name": "kb-orchestration",
   "version": "0.1.0",
-  "description": "Knowledgebase orchestration pipeline",
+  "description": "Automation pipeline for knowledgebase ingestion, enrichment, classification, and publishing.",
   "type": "module",
   "scripts": {
     "pipeline": "node scripts/run-pipeline.js",
@@ -9,13 +9,19 @@
     "enrich": "node scripts/enrich.js",
     "classify": "node scripts/classify.js",
     "digest": "node scripts/digest.js",
-    "publish": "node scripts/publish.js"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "node-fetch": "^3.3.2"
+    "publish": "node scripts/publish.js",
+    "status": "node scripts/system-status.js",
+    "refresh-raindrop": "node scripts/refresh-raindrop.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "rss-parser": "^3.12.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.11.1",
+    "prettier": "^3.3.3"
   }
 }
