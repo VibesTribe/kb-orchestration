@@ -1,0 +1,7 @@
+{
+  "enrich": [
+    "openrouter/anthropic-claude-3-sonnet",
+    "openrouter/gpt-4o-mini",
+    "openrouter/deepseek-chat"
+  ]
+}
