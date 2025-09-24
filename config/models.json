@@ -1,10 +1,9 @@
 {
-  "enrich": [
-  "xai/grok-4-f",
-  "deepseek/deepseek-v3.1",
-  "nvidia/nemotron-nano-9b-v2",
-  "mistralai/mistral-7b-instruct:latest"
-]
-
+  "models": [
+    "xai/grok-4-f",
+    "deepseek/deepseek-v3.1",
+    "nvidia/nemotron-nano-9b-v2",
+    "mistralai/mistral-7b-instruct:latest"
+  ]
 }
 
