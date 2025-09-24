@@ -1,6 +1,10 @@
+// scripts/publish.js
+// Prepare site artifacts and push upstream so kb-site stays current.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pushUpdate } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -11,20 +15,22 @@ const CURATED = path.join(DATA, "curated");
 const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
 const STATS_FILE = path.join(CACHE, "publish-stats.json");
 
-function log(m,c={}){ console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length?c:""); }
-async function ensureDir(p){ await fs.mkdir(p,{recursive:true}); }
-async function loadJson(p, fb){ try { return JSON.parse(await fs.readFile(p,"utf8")); } catch { return fb; } }
-async function saveJson(p, v){ await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v,null,2), "utf8"); }
+function log(m, c = {}) {
+  console.log(`[${new Date().toISOString()}] ${m}`, Object.keys(c).length ? c : "");
+}
+async function ensureDir(p) { await fs.mkdir(p, { recursive: true }); }
+async function loadJson(p, fb) { try { return JSON.parse(await fs.readFile(p, "utf8")); } catch { return fb; } }
+async function saveJson(p, v) { await ensureDir(path.dirname(p)); await fs.writeFile(p, JSON.stringify(v, null, 2), "utf8"); }
 
-function nowStamp(){ return Date.now().toString(); }
-function dayDir(){ return new Date().toISOString().slice(0,10); }
+function nowStamp() { return Date.now().toString(); }
+function dayDir() { return new Date().toISOString().slice(0, 10); }
 
 async function latestCuratedRun() {
-  const days = await fs.readdir(CURATED).catch(()=>[]);
+  const days = await fs.readdir(CURATED).catch(() => []);
   days.sort().reverse();
   for (const d of days) {
     const dPath = path.join(CURATED, d);
-    const stamps = await fs.readdir(dPath).catch(()=>[]);
+    const stamps = await fs.readdir(dPath).catch(() => []);
     stamps.sort().reverse();
     for (const s of stamps) {
       const f = path.join(dPath, s, "items.json");
@@ -40,8 +46,9 @@ export async function publish() {
   await ensureDir(dir);
 
   // always copy latest knowledge.json so the site can read it
+  let kb = { items: [] };
   try {
-    const kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
+    kb = await loadJson(KNOWLEDGE_FILE, { items: [] });
     await saveJson(path.join(dir, "knowledge.json"), kb);
   } catch { /* ignore */ }
 
@@ -60,8 +67,11 @@ export async function publish() {
 
   await saveJson(STATS_FILE, { count: 1 });
   log("Publish artifacts prepared", { dir, items: (run?.content?.items ?? []).length });
+
+  // 🔼 Push upstream so kb-site GitHub Pages can serve the newest knowledge
+  await pushUpdate(kb, "Publish step update");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  publish().catch((e)=>{ console.error("Publish failed", e); process.exitCode=1; });
+  publish().catch((e) => { console.error("Publish failed", e); process.exitCode = 1; });
 }
