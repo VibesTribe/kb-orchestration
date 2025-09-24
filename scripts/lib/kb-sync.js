@@ -1,12 +1,11 @@
 // scripts/lib/kb-sync.js
-// Handles syncing local artifacts (knowledge.json, curated runs, digests, etc.)
-// back into the upstream knowledgebase repo.
-// Uses github-files.js (for upsertFile) instead of github-secrets.js (which is only for secret encryption).
+// Handles syncing artifacts (knowledge.json, curated runs, digests) back into
+// the upstream knowledgebase repo using github-files.js.
 
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { upsertFile } from "./github-files.js"; // ✅ fixed import
+import { upsertFile } from "./github-files.js"; // ✅ correct import
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
@@ -17,8 +16,6 @@ export async function syncFile(localPath, remotePath, message = "Sync file") {
   try {
     const content = await fs.readFile(localPath, "utf8");
     await upsertFile({
-      owner: "VibesTribe",
-      repo: "knowledgebase",
       path: remotePath,
       content,
       message,
@@ -37,7 +34,7 @@ export async function syncKnowledge() {
   await syncFile(local, remote, "Update knowledge.json");
 }
 
-// Push curated runs upstream (optional, controlled by caller)
+// Push curated runs upstream (latest directory contents)
 export async function syncCuratedRun(curatedDir) {
   const remoteDir = "curated";
   try {
@@ -49,6 +46,26 @@ export async function syncCuratedRun(curatedDir) {
     }
   } catch (err) {
     console.error(`❌ Failed to sync curated run:`, err);
+    throw err;
+  }
+}
+
+// Push digest artifacts upstream (JSON, TXT, HTML)
+export async function syncDigest(digestResult) {
+  if (!digestResult?.files) {
+    console.log("ℹ️ No digestResult provided, skipping digest sync");
+    return;
+  }
+
+  const remoteDir = "digest";
+  try {
+    for (const [label, filePath] of Object.entries(digestResult.files)) {
+      const fileName = path.basename(filePath);
+      const remotePath = path.join(remoteDir, fileName);
+      await syncFile(filePath, remotePath, `Update digest/${fileName}`);
+    }
+  } catch (err) {
+    console.error("❌ Failed to sync digest artifacts:", err);
     throw err;
   }
 }
