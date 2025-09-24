@@ -12,7 +12,7 @@ if (!OPENROUTER_API_KEY) {
 }
 
 let models = [];
-let currentIndex = 0;
+let roundRobinIndex = 0;
 
 async function loadModels() {
   if (models.length) return models;
@@ -31,7 +31,7 @@ async function loadModels() {
 }
 
 /**
- * Call OpenRouter with auto-rotation through configured models.
+ * Call OpenRouter with round-robin + fallback through configured models.
  * @param {string} prompt
  * @param {string} purpose - "enrich" | "classify"
  * @returns {Promise<{text: string, model: string}>}
@@ -42,23 +42,22 @@ export async function callWithRotation(prompt, purpose = "enrich") {
     throw new Error("No models available in config/models.json");
   }
 
-  let attempts = 0;
-  const maxAttempts = modelList.length * 2; // try at least twice through all models
+  // pick starting index for this item
+  const startIndex = roundRobinIndex;
+  roundRobinIndex = (roundRobinIndex + 1) % modelList.length;
 
-  while (attempts < maxAttempts) {
-    const model = modelList[currentIndex];
-    currentIndex = (currentIndex + 1) % modelList.length;
-
+  // try each model in sequence, starting from startIndex
+  for (let i = 0; i < modelList.length; i++) {
+    const model = modelList[(startIndex + i) % modelList.length];
     try {
       const result = await callOpenRouter(model, prompt);
       return { text: result, model };
     } catch (err) {
       console.warn(`[openrouter] ${purpose} failed with ${model}: ${err.message}`);
-      attempts++;
     }
   }
 
-  throw new Error(`All models failed for ${purpose} after ${maxAttempts} attempts`);
+  throw new Error(`All models failed for ${purpose} (tried ${modelList.length} models)`);
 }
 
 async function callOpenRouter(model, prompt) {
