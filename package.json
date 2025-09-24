@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "dotenv": "16.4.5",
-    "node-fetch": "3.3.2"
+    "node-fetch": "3.3.2",
+    "tweetsodium": "0.0.5"
   }
 }
