@@ -28,31 +28,19 @@ jobs:
           npm config set registry https://registry.npmjs.org/
           npm install --no-audit --no-fund
 
-      - name: Refresh Raindrop token (optional; safe if missing refresh)
+      - name: Refresh Raindrop token (optional)
         env:
-          # GitHub tokens
           ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
-          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
-
-          # Raindrop
           RAINDROP_CLIENT_ID: ${{ secrets.RAINDROP_CLIENT_ID }}
           RAINDROP_CLIENT_SECRET: ${{ secrets.RAINDROP_CLIENT_SECRET }}
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
-          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
         run: node scripts/refresh-raindrop.js || true
 
       - name: Run pipeline
         env:
-          # GitHub tokens
-          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
-          KNOWLEDGEBASE_TOKEN: ${{ secrets.KNOWLEDGEBASE_TOKEN }}
-
-          # External APIs
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-
-          # Email
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           BREVO_FROM_EMAIL: ${{ secrets.BREVO_FROM_EMAIL }}
           BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
