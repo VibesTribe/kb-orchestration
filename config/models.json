@@ -4,6 +4,7 @@
     "deepseek/deepseek-v3.1",
     "nvidia/nemotron-nano-9b-v2",
     "mistralai/mistral-7b-instruct:latest"
-  ]
-}
+  ],
 
+  "__note": "These models are used in rotation via OpenRouter for enrichment/classify. YouTube videos without transcripts do NOT use this list — they fall back to Gemini directly via GEMINI_API."
+}
