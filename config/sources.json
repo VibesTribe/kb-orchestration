@@ -50,7 +50,8 @@
       { "id": "UCl2WjB4j6j8F5E8W8tW4R5w", "mode": "weekly-once", "label": "aiexplained-official" },
       { "id": "UCY7Q9m5S72K-K0-4V3R5X8Q", "mode": "weekly-once", "label": "aiadvantage" },
       { "id": "UCb8H6q4j6S3S7h7V8C2X1gA", "mode": "weekly-once", "label": "rabbitmetrics" },
-      { "id": "UCDQW5Yt6Y7X0A2Y3W4X5T6Q", "mode": "weekly-once", "label": "theai.thing_1" }
+      { "id": "UCDQW5Yt6Y7X0A2Y3W4X5T6Q", "mode": "weekly-once", "label": "theai.thing_1" },
+      { "id": "UC_0P_EW_8vE11-mp_mb-auA", "mode": "weekly-once", "label": "code4AI" }
     ],
     "defaultWindow": "1d"
   },
