@@ -1,6 +1,12 @@
 // scripts/ingest.js
 // Real ingestion of Raindrop collections, YouTube playlists, YouTube channels
 // with incremental checkpointing + per-item upstream push to prevent data loss.
+// Safety Net Plan added:
+//  - Bootstrap mode with retry tracking for weekly-once sources
+//  - Per-channel error isolation (already present; enhanced with status fields)
+//  - Skip-duplicates via seenIds + global ID check (unchanged core behavior)
+//  - Exponential backoff via skipUntil to avoid daily spam on permanent errors
+//  - Success tracking (lastSuccess) vs lastError; do not block other sources
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -58,7 +64,7 @@ async function loadKnowledge() {
 async function loadState() {
   await ensureDir(CACHE_DIR);
   const state = await loadJson(STATE_FILE, {
-    sources: {},         // per-source metadata: lastRun, seenIds map
+    sources: {}, // per-source metadata
   });
   if (!state.sources) state.sources = {};
   return state;
@@ -120,15 +126,61 @@ async function loadSourcesConfig() {
   return out;
 }
 
+// ------- Safety Net helpers -------
+
+function getOrInitSourceState(state, key, initialMode) {
+  const existing = state.sources[key];
+  if (existing) return existing;
+  // bootstrapPending: for "weekly-once", keep retrying once-per-run until a first successful call
+  const s = {
+    lastRun: null,            // set only on success
+    lastSuccess: null,        // success timestamp
+    lastError: null,          // last error timestamp
+    failures: 0,              // consecutive failure count
+    skipUntil: null,          // ISO date string (YYYY-MM-DD) to skip retries until
+    bootstrapPending: initialMode === "weekly-once", // true until first success
+    seenIds: {},              // dedupe per-source
+  };
+  state.sources[key] = s;
+  return s;
+}
+
+function shouldSkipByBackoff(srcState) {
+  if (!srcState.skipUntil) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return today < srcState.skipUntil;
+}
+
+function markSuccess(srcState) {
+  srcState.lastRun = nowIso();
+  srcState.lastSuccess = srcState.lastRun;
+  srcState.lastError = null;
+  srcState.failures = 0;
+  srcState.skipUntil = null;
+  if (srcState.bootstrapPending) srcState.bootstrapPending = false;
+}
+
+function addDaysISO(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function markFailure(srcState) {
+  srcState.lastError = nowIso();
+  srcState.failures = (srcState.failures || 0) + 1;
+  // Exponential-ish backoff: 1d, 2d, 3d, ... max 7d
+  const delay = Math.min(srcState.failures, 7);
+  srcState.skipUntil = addDaysISO(new Date(), delay);
+}
+
 // ------- RAINDROP -------
 
 async function fetchRaindropCollectionItems(collectionId, { sinceDate, page = 0, perPage = 50 } = {}) {
-  // API: https://api.raindrop.io/rest/v1/raindrops/{collection}?page=0&perpage=50&search=...
-  // We can filter by created date client-side.
+  // API: https://api.raindrop.io/rest/v1/raindrops/{collection}?page=0&perpage=50
   const url = new URL(`https://api.raindrop.io/rest/v1/raindrops/${collectionId}`);
   url.searchParams.set("page", String(page));
   url.searchParams.set("perpage", String(perPage));
-  // NOTE: Search param could be used for advanced filters; keeping simple.
 
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${RAINDROP_TOKEN}` },
@@ -149,17 +201,22 @@ async function fetchRaindropCollectionItems(collectionId, { sinceDate, page = 0,
   return { items, hasMore: items.length === perPage };
 }
 
-async function ingestRaindropCollection(source, knowledge, state, key) {
+async function ingestRaindropCollection(source, knowledge, state) {
   if (!RAINDROP_TOKEN) {
     log("RAINDROP_TOKEN missing; skipping raindrop collection", { collection: source.id });
     return;
   }
 
   const sKey = `raindrop:${source.id}`;
-  const srcState = state.sources[sKey] || { lastRun: null, seenIds: {} };
+  const srcState = getOrInitSourceState(state, sKey, source.mode);
 
-  // throttle for weekly-once
-  if (source.mode === "weekly-once" && !isWeeklyWindow(srcState.lastRun)) {
+  if (shouldSkipByBackoff(srcState)) {
+    log("Skip by backoff", { source: sKey, skipUntil: srcState.skipUntil });
+    return;
+  }
+
+  // Weekly throttle — EXCEPT while bootstrapping
+  if (source.mode === "weekly-once" && !srcState.bootstrapPending && !isWeeklyWindow(srcState.lastRun)) {
     log("Skip (weekly-once window not reached)", { source: sKey });
     return;
   }
@@ -168,42 +225,49 @@ async function ingestRaindropCollection(source, knowledge, state, key) {
   let page = 0;
   let added = 0;
 
-  while (true) {
-    const { items, hasMore } = await fetchRaindropCollectionItems(source.id, { sinceDate, page });
-    if (!items.length) break;
+  try {
+    while (true) {
+      const { items, hasMore } = await fetchRaindropCollectionItems(source.id, { sinceDate, page });
+      if (!items.length) break;
 
-    for (const it of items) {
-      const id = String(it._id ?? it._idStr ?? it.link ?? `${source.id}-${it.title}-${it.created}`);
-      if (srcState.seenIds[id]) continue;
+      for (const it of items) {
+        const id = String(it._id ?? it._idStr ?? it.link ?? `${source.id}-${it.title}-${it.created}`);
+        if (srcState.seenIds[id]) continue;
 
-      const item = {
-        id: `raindrop:${id}`,
-        title: it.title || it.excerpt || "(untitled)",
-        url: it.link || it.url || null,
-        sourceType: "raindrop",
-        collectionId: source.id,
-        createdAt: it.created || it.createdAt || null,
-        ingestedAt: nowIso(),
-      };
+        const item = {
+          id: `raindrop:${id}`,
+          title: it.title || it.excerpt || "(untitled)",
+          url: it.link || it.url || null,
+          sourceType: "raindrop",
+          collectionId: source.id,
+          createdAt: it.created || it.createdAt || null,
+          ingestedAt: nowIso(),
+        };
 
-      // dedupe global too
-      if (!knowledge.items.find((k) => k.id === item.id)) {
-        knowledge.items.push(item);
-        await saveKnowledge(knowledge); // local + pushUpdate
-        added++;
+        // global dedupe too
+        if (!knowledge.items.find((k) => k.id === item.id)) {
+          knowledge.items.push(item);
+          await saveKnowledge(knowledge); // local + pushUpdate
+          added++;
+        }
+
+        srcState.seenIds[id] = true;
       }
 
-      srcState.seenIds[id] = true;
+      if (!hasMore) break;
+      page += 1;
     }
 
-    if (!hasMore) break;
-    page += 1;
+    markSuccess(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
+    log("Raindrop collection ingested", { collectionId: source.id, added, bootstrapCleared: !srcState.bootstrapPending });
+  } catch (e) {
+    log("Raindrop collection error", { id: source.id, error: e.message });
+    markFailure(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
   }
-
-  srcState.lastRun = nowIso();
-  state.sources[sKey] = srcState;
-  await saveState(state);
-  log("Raindrop collection ingested", { collectionId: source.id, added });
 }
 
 // ------- YOUTUBE -------
@@ -231,53 +295,66 @@ async function ingestYouTubePlaylist(source, knowledge, state) {
   }
 
   const sKey = `yt:playlist:${source.id}`;
-  const srcState = state.sources[sKey] || { lastRun: null, seenIds: {} };
+  const srcState = getOrInitSourceState(state, sKey, source.mode);
 
-  // For 'once', if we've ever run, skip unless no seenIds
-  if (source.mode === "once" && srcState.lastRun) {
-    log("Skip (once already ran)", { source: sKey });
+  if (shouldSkipByBackoff(srcState)) {
+    log("Skip by backoff", { source: sKey, skipUntil: srcState.skipUntil });
+    return;
+  }
+
+  // For 'once', if we've ever run successfully, skip
+  if (source.mode === "once" && srcState.lastSuccess) {
+    log("Skip (once already succeeded)", { source: sKey });
     return;
   }
 
   let pageToken = null;
   let added = 0;
-  do {
-    const json = await fetchYouTubePlaylistItems(source.id, pageToken);
-    for (const it of json.items || []) {
-      const videoId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
-      if (!videoId) continue;
-      if (srcState.seenIds[videoId]) continue;
 
-      const snippet = it.snippet || {};
-      const item = {
-        id: `youtube:video:${videoId}`,
-        title: snippet.title || "(untitled)",
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-        sourceType: "youtube",
-        playlistId: source.id,
-        publishedAt: snippet.publishedAt || null,
-        ingestedAt: nowIso(),
-      };
+  try {
+    do {
+      const json = await fetchYouTubePlaylistItems(source.id, pageToken);
+      for (const it of json.items || []) {
+        const videoId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+        if (!videoId) continue;
+        if (srcState.seenIds[videoId]) continue;
 
-      if (!knowledge.items.find((k) => k.id === item.id)) {
-        knowledge.items.push(item);
-        await saveKnowledge(knowledge); // local + pushUpdate
-        added++;
+        const snippet = it.snippet || {};
+        const item = {
+          id: `youtube:video:${videoId}`,
+          title: snippet.title || "(untitled)",
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          sourceType: "youtube",
+          playlistId: source.id,
+          publishedAt: snippet.publishedAt || null,
+          ingestedAt: nowIso(),
+        };
+
+        if (!knowledge.items.find((k) => k.id === item.id)) {
+          knowledge.items.push(item);
+          await saveKnowledge(knowledge); // local + pushUpdate
+          added++;
+        }
+
+        srcState.seenIds[videoId] = true;
       }
+      pageToken = json.nextPageToken || null;
+    } while (pageToken);
 
-      srcState.seenIds[videoId] = true;
-    }
-    pageToken = json.nextPageToken || null;
-  } while (pageToken);
-
-  srcState.lastRun = nowIso();
-  state.sources[sKey] = srcState;
-  await saveState(state);
-  log("YouTube playlist ingested", { playlistId: source.id, added });
+    markSuccess(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
+    log("YouTube playlist ingested", { playlistId: source.id, added, bootstrapCleared: !srcState.bootstrapPending });
+  } catch (e) {
+    log("YouTube playlist error", { id: source.id, error: e.message });
+    markFailure(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
+  }
 }
 
 async function fetchYouTubeChannelUploads(channelId, publishedAfterIso) {
-  // Use search.list to fetch by channel + time window (publishedAfter)
+  // Using search.list for channel + time window (publishedAfter)
   const url = new URL("https://www.googleapis.com/youtube/v3/search");
   url.searchParams.set("part", "snippet");
   url.searchParams.set("channelId", channelId);
@@ -292,7 +369,7 @@ async function fetchYouTubeChannelUploads(channelId, publishedAfterIso) {
     const t = await res.text();
     throw new Error(`YouTube channel fetch failed: ${res.status} ${t}`);
   }
-  return res.json(); // { items, nextPageToken? ... } (search API has nextPageToken too)
+  return res.json(); // { items, nextPageToken? ... }
 }
 
 async function ingestYouTubeChannel(source, knowledge, state) {
@@ -302,9 +379,15 @@ async function ingestYouTubeChannel(source, knowledge, state) {
   }
 
   const sKey = `yt:channel:${source.id}`;
-  const srcState = state.sources[sKey] || { lastRun: null, seenIds: {} };
+  const srcState = getOrInitSourceState(state, sKey, source.mode);
 
-  if (source.mode === "weekly-once" && !isWeeklyWindow(srcState.lastRun)) {
+  if (shouldSkipByBackoff(srcState)) {
+    log("Skip by backoff", { source: sKey, skipUntil: srcState.skipUntil });
+    return;
+  }
+
+  // Weekly throttle — EXCEPT while bootstrapping
+  if (source.mode === "weekly-once" && !srcState.bootstrapPending && !isWeeklyWindow(srcState.lastRun)) {
     log("Skip (weekly-once window not reached)", { source: sKey });
     return;
   }
@@ -315,57 +398,70 @@ async function ingestYouTubeChannel(source, knowledge, state) {
   let pageToken = null;
   let added = 0;
 
-  do {
-    const json = await fetchYouTubeChannelUploads(source.id, afterIso, pageToken);
-    for (const it of json.items || []) {
-      const videoId = it.id?.videoId;
-      if (!videoId) continue;
-      if (srcState.seenIds[videoId]) continue;
+  try {
+    // Keep the paging style close to what you had (don’t over-change working code)
+    do {
+      const json = await fetchYouTubeChannelUploads(source.id, afterIso);
+      for (const it of json.items || []) {
+        const videoId = it.id?.videoId;
+        if (!videoId) continue;
+        if (srcState.seenIds[videoId]) continue;
 
-      const snippet = it.snippet || {};
-      const item = {
-        id: `youtube:video:${videoId}`,
-        title: snippet.title || "(untitled)",
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-        sourceType: "youtube",
-        channelId: source.id,
-        publishedAt: snippet.publishedAt || null,
-        ingestedAt: nowIso(),
-      };
+        const snippet = it.snippet || {};
+        const item = {
+          id: `youtube:video:${videoId}`,
+          title: snippet.title || "(untitled)",
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          sourceType: "youtube",
+          channelId: source.id,
+          publishedAt: snippet.publishedAt || null,
+          ingestedAt: nowIso(),
+        };
 
-      if (!knowledge.items.find((k) => k.id === item.id)) {
-        knowledge.items.push(item);
-        await saveKnowledge(knowledge); // local + pushUpdate
-        added++;
+        if (!knowledge.items.find((k) => k.id === item.id)) {
+          knowledge.items.push(item);
+          await saveKnowledge(knowledge); // local + pushUpdate
+          added++;
+        }
+
+        srcState.seenIds[videoId] = true;
       }
 
-      srcState.seenIds[videoId] = true;
-    }
-    pageToken = json.nextPageToken || null;
-    // If there is a nextPageToken, loop again:
-    if (pageToken) {
-      // fetch next page
-      const url = new URL("https://www.googleapis.com/youtube/v3/search");
-      url.searchParams.set("part", "snippet");
-      url.searchParams.set("channelId", source.id);
-      url.searchParams.set("maxResults", "50");
-      url.searchParams.set("order", "date");
-      url.searchParams.set("type", "video");
-      url.searchParams.set("key", YOUTUBE_API_KEY);
-      url.searchParams.set("publishedAfter", afterIso);
-      url.searchParams.set("pageToken", pageToken);
-      const res = await fetch(url.toString());
-      if (!res.ok) break; // stop paging on failure
-      const nxt = await res.json();
-      json.items = (json.items || []).concat(nxt.items || []);
-      pageToken = nxt.nextPageToken || null; // continue outer loop
-    }
-  } while (pageToken);
+      pageToken = json.nextPageToken || null;
+      if (pageToken) {
+        // attempt next page (preserve your existing pattern)
+        const url = new URL("https://www.googleapis.com/youtube/v3/search");
+        url.searchParams.set("part", "snippet");
+        url.searchParams.set("channelId", source.id);
+        url.searchParams.set("maxResults", "50");
+        url.searchParams.set("order", "date");
+        url.searchParams.set("type", "video");
+        url.searchParams.set("key", YOUTUBE_API_KEY);
+        url.searchParams.set("publishedAfter", afterIso);
+        url.searchParams.set("pageToken", pageToken);
+        const res = await fetch(url.toString());
+        if (!res.ok) {
+          log("YouTube channel page fetch failed, stopping pagination", { channelId: source.id, status: res.status });
+          pageToken = null;
+        } else {
+          const nxt = await res.json();
+          // Merge items & carry nextPageToken forward
+          json.items = (json.items || []).concat(nxt.items || []);
+          pageToken = nxt.nextPageToken || null;
+        }
+      }
+    } while (pageToken);
 
-  srcState.lastRun = nowIso();
-  state.sources[sKey] = srcState;
-  await saveState(state);
-  log("YouTube channel ingested", { channelId: source.id, added });
+    markSuccess(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
+    log("YouTube channel ingested", { channelId: source.id, added, bootstrapCleared: !srcState.bootstrapPending });
+  } catch (e) {
+    log("YouTube channel error", { id: source.id, error: e.message });
+    markFailure(srcState);
+    state.sources[sKey] = srcState;
+    await saveState(state);
+  }
 }
 
 // ------- MAIN -------
@@ -383,7 +479,8 @@ export async function ingest() {
     try {
       await ingestRaindropCollection(col, knowledge, state);
     } catch (e) {
-      log("Raindrop collection error", { id: col.id, error: e.message });
+      // Per-source isolation
+      log("Raindrop collection error (outer)", { id: col.id, error: e.message });
     }
   }
 
@@ -392,7 +489,7 @@ export async function ingest() {
     try {
       await ingestYouTubePlaylist(pl, knowledge, state);
     } catch (e) {
-      log("YouTube playlist error", { id: pl.id, error: e.message });
+      log("YouTube playlist error (outer)", { id: pl.id, error: e.message });
     }
   }
 
@@ -401,7 +498,7 @@ export async function ingest() {
     try {
       await ingestYouTubeChannel(ch, knowledge, state);
     } catch (e) {
-      log("YouTube channel error", { id: ch.id, error: e.message });
+      log("YouTube channel error (outer)", { id: ch.id, error: e.message });
     }
   }
 
