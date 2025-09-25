@@ -1,64 +1,59 @@
 {
   "raindrop": {
     "collections": [
-      { "id": "59987361", "name": "vibeflow", "mode": "once" }
-    ],
-    "defaultWindow": "1d"
+      { "id": "vibeflow", "mode": "daily" }
+    ]
   },
   "youtube": {
     "playlists": [
-      { "id": "PLYbEaHqVPm4u1dw5SiA5NETALRykvP2tn", "mode": "once" },
-      { "id": "PLYbEaHqVPm4u_91Nd4IHzyv4i2mKf0xPq", "mode": "pause" }
+      { "id": "PLYbEaHqVPm4u_91Nd4IHzyv4i2mKf0xPq", "mode": "once" } 
     ],
     "channels": [
-      { "handle": "indydevdan", "mode": "weekly-once" },
-      { "handle": "ColeMedin", "mode": "weekly-once" },
-      { "handle": "iamseankochel", "mode": "weekly-once" },
-      { "handle": "GosuCoder", "mode": "weekly-once" },
-      { "handle": "DavidOndrej", "mode": "weekly-once" },
-      { "handle": "vrsen", "mode": "weekly-once" },
-      { "handle": "soloswiftcrafter", "mode": "weekly-once" },
-      { "handle": "DevelopersDigest", "mode": "weekly-once" },
-      { "handle": "matthew_berman", "mode": "weekly-once" },
-      { "handle": "MervinPraison", "mode": "weekly-once" },
-      { "handle": "theailifestyle", "mode": "weekly-once" },
-      { "handle": "AllAboutAI", "mode": "weekly-once" },
-      { "handle": "code4AI", "mode": "weekly-once" },
-      { "handle": "JulianGoldieSEO", "mode": "weekly-once" },
-      { "handle": "AIJasonZ", "mode": "weekly-once" },
-      { "handle": "BMadCode", "mode": "weekly-once" },
-      { "handle": "nicksaraev", "mode": "weekly-once" },
-      { "handle": "AILABS-393", "mode": "weekly-once" },
-      { "handle": "nateherk", "mode": "weekly-once" },
-      { "handle": "AIOriented", "mode": "weekly-once" },
-      { "handle": "adrianchinghc", "mode": "weekly-once" },
-      { "handle": "AICodeKing", "mode": "weekly-once" },
-      { "handle": "TheAIAutomators", "mode": "weekly-once" },
-      { "handle": "airevolutionx", "mode": "weekly-once" },
-      { "handle": "NateBJones", "mode": "weekly-once" },
-      { "handle": "MetalSole", "mode": "weekly-once" },
-      { "handle": "AI-GPTWorkshop", "mode": "weekly-once" },
-      { "handle": "CreatorMagicAI", "mode": "weekly-once" },
-      { "handle": "TechWithTim", "mode": "weekly-once" },
-      { "handle": "Mark_Kashef", "mode": "weekly-once" },
-      { "handle": "AIDailyBrief", "mode": "weekly-once" },
-      { "handle": "convex-dev", "mode": "weekly-once" },
-      { "handle": "d-squared70", "mode": "weekly-once" },
-      { "handle": "engineerprompt", "mode": "weekly-once" },
-      { "handle": "fahdmirza", "mode": "weekly-once" },
-      { "handle": "AlexFinnOfficial", "mode": "weekly-once" },
-      { "handle": "TheMetaverseGuy", "mode": "weekly-once" },
-      { "handle": "DarrenBuildsAI", "mode": "weekly-once" },
-      { "handle": "1littlecoder", "mode": "weekly-once" },
-      { "handle": "aiexplained-official", "mode": "weekly-once" },
-      { "handle": "aiadvantage", "mode": "weekly-once" },
-      { "handle": "code4A", "mode": "weekly-once" },
-      { "handle": "rabbitmetrics", "mode": "weekly-once" },
-      { "handle": "WhatsAI", "mode": "weekly-once" },
-      { "handle": "intheworldofai", "mode": "weekly-once" },
-      { "handle": "DenDev", "mode": "weekly-once" },
-      { "handle": "theai.thing_1", "mode": "weekly-once" }
+      { "id": "UCQyLg-8x7kS6WwI_Gk179_Q", "mode": "weekly-once" }, // indydevdan
+      { "id": "UCVqQc38mGqR4Y2zN32L719w", "mode": "weekly-once" }, // ColeMedin
+      { "id": "UCe1oXQ47y7_F1bUjF8tD96Q", "mode": "weekly-once" }, // iamseankochel
+      { "id": "UCu21fJd8-jWw-d1q58Fp2_w", "mode": "weekly-once" }, // GosuCoder
+      { "id": "UCgWv9d_0_9d6_5G2y3M8x0w", "mode": "weekly-once" }, // DavidOndrej
+      { "id": "UC-e_bC8i-y14T4yVvS7N25A", "mode": "weekly-once" }, // vrsen
+      { "id": "UCF-F9q3e5W_v2x729QG_Q-g", "mode": "weekly-once" }, // soloswiftcrafter
+      { "id": "UCjG1GfWc9p1o_qYhR3gYv4g", "mode": "weekly-once" }, // DevelopersDigest
+      { "id": "UC2i_j0m7J2hBqCqW0hW-EGA", "mode": "weekly-once" }, // matthew_berman
+      { "id": "UC5V83G27L-u_gqjW5r7vBfw", "mode": "weekly-once" }, // MervinPraison
+      { "id": "UCyK2hX2K9552Lq8U2X-71zQ", "mode": "weekly-once" }, // theailifestyle
+      { "id": "UCyXevW05YUa9wGQgpSPdcUw", "mode": "weekly-once" }, // AllAboutAI
+      { "id": "UCLxK3W6124P9Fv1XvK8kLWA", "mode": "weekly-once" }, // code4AI
+      { "id": "UC6erWloKMgYhU--VvMA5ZJQ", "mode": "weekly-once" }, // JulianGoldieSEO / WhatsAI
+      { "id": "UCJ-WzO3Yw636Vd8Jp3HwE2Q", "mode": "weekly-once" }, // AIJasonZ
+      { "id": "UCx2xO4WlVqH0DkEwF31L2vQ", "mode": "weekly-once" }, // BMadCode
+      { "id": "UCCuL2xK5g2K41J_XnK7g6hQ", "mode": "weekly-once" }, // nicksaraev
+      { "id": "UCxR256Pz6m8640sV6H-YhLg", "mode": "weekly-once" }, // AILABS-393
+      { "id": "UCdE5uW-m_sVb61lQvP2T5jQ", "mode": "weekly-once" }, // nateherk
+      { "id": "UC2t-d698P0K2w3dE-G3zL5g", "mode": "weekly-once" }, // AIOriented
+      { "id": "UCzW3n1gN35iG-g6F_jM-vsw", "mode": "weekly-once" }, // adrianchinghc
+      { "id": "UC94qLg1qLg-1K51qLg-1K51qLg-1K51qLg-1K51qLg", "mode": "weekly-once" }, // AICodeKing (weird ID, double-check)
+      { "id": "UCe4-Fp4B2Gz3L2W9B3W1x-g", "mode": "weekly-once" }, // TheAIAutomators
+      { "id": "UCu_K4pE-1V-o3C6U8j3R1gQ", "mode": "weekly-once" }, // airevolutionx
+      { "id": "UCPWqC-wX739Y6iV3-Q6B9vQ", "mode": "weekly-once" }, // NateBJones
+      { "id": "UC9QW_B9J-F-p-w5W5N-G-6w", "mode": "weekly-once" }, // MetalSole / d-squared70
+      { "id": "UCb7hD-J9N3B4P1z1P4j4qPg", "mode": "weekly-once" }, // AI-GPTWorkshop
+      { "id": "UC08Fah8EIryeOZRkjBRohcQ", "mode": "weekly-once" }, // CreatorMagicAI
+      { "id": "UC4SVo0Ue36atMRYgIKXFbyw", "mode": "weekly-once" }, // TechWithTim
+      { "id": "UCoT5bC8L_4q7L0L-5X9_j_g", "mode": "weekly-once" }, // Mark_Kashef
+      { "id": "UCk4E1iN12RzYJ7yH24S8f4A", "mode": "weekly-once" }, // AIDailyBrief
+      { "id": "UCv3yqL-fK7C-j-y4-j2-Lw", "mode": "weekly-once" }, // convex-dev
+      { "id": "UC-w4V-F7k7F6J6k5L-M-1XQ", "mode": "weekly-once" }, // engineerprompt
+      { "id": "UCv5Q9w7-2g6K6N6y1J7T5tA", "mode": "weekly-once" }, // fahdmirza
+      { "id": "UCfQNB91qRP_5ILeu_S_bSkg", "mode": "weekly-once" }, // AlexFinnOfficial
+      { "id": "UCy2R6Y2r4E1R4Y1L8X9K3tQ", "mode": "weekly-once" }, // TheMetaverseGuy
+      { "id": "UCaJ1IYz3Bxcg9tCJPpn5v0g", "mode": "weekly-once" }, // DarrenBuildsAI
+      { "id": "UC3E_Fj0y7N4p-8N4X0M9B9w", "mode": "weekly-once" }, // 1littlecoder
+      { "id": "UCl2WjB4j6j8F5E8W8tW4R5w", "mode": "weekly-once" }, // aiexplained-official
+      { "id": "UCY7Q9m5S72K-K0-4V3R5X8Q", "mode": "weekly-once" }, // aiadvantage
+      { "id": "UCb8H6q4j6S3S7h7V8C2X1gA", "mode": "weekly-once" }, // rabbitmetrics
+      { "id": "UCDQW5Yt6Y7X0A2Y3W4X5T6Q", "mode": "weekly-once" }  // theai.thing_1
     ],
+
+}
     "defaultWindow": "1d"
   },
   "rss": [
