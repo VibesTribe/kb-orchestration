@@ -2,9 +2,9 @@
   "models": [
     "xai/grok-4-f",
     "deepseek/deepseek-v3.1",
-    "mistralai/mistral-7b-instruct:latest"
-    "openai/gpt-oss-20b:free"
+    "deepseek/deepseek-r1:free",
+    "mistralai/mistral-7b-instruct:latest",
+    "openai/gpt-4.1-mini-oss" 
   ],
-
-  "__note": "These models are used in rotation via OpenRouter for enrichment/classify. YouTube videos without transcripts do NOT use this list — they fall back to Gemini directly via GEMINI_API."
+  "__note": "Curated rotation via OpenRouter. Nemotron excluded. GPT-OSS added as a fallback anchor for stable enrichment."
 }
