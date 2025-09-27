@@ -1,6 +1,6 @@
 // scripts/enrich.js
 // Enrichment flow focused on high-quality, classification-ready outputs.
-// Order: OpenAI → Gemini → OpenRouter → DeepSeek (all via guardrails).
+// Uses stage-specific model rotation from config/models.json.
 // YouTube: transcript → summarize JSON. Non-YouTube: summarize JSON from title/desc.
 // Saves incrementally after each item.
 
@@ -10,9 +10,7 @@ import { fileURLToPath } from "node:url";
 import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
-import { callGemini } from "./lib/gemini.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
-import { safeCall } from "./lib/guardrails.js";
 import { logUsage, estimateTokensFromText } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -172,120 +170,6 @@ function parseStrictJSON(txt) {
   return null;
 }
 
-// ---------- Model callers (guarded) ----------
-async function enrichWithOpenAI(prompt, itemId) {
-  return safeCall({
-    provider: "openai",
-    model: "gpt-5-mini",
-    estCost: 0.0002,
-    fn: async () => {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-5-mini",
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) throw new Error(`OpenAI error: ${res.status} ${res.statusText}`);
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-      // usage tokens if present
-      const inTok = data.usage?.prompt_tokens ?? estimateTokensFromText(prompt);
-      const outTok = data.usage?.completion_tokens ?? estimateTokensFromText(content);
-      await logUsage({ stage: "enrich", model: "gpt-5-mini", inputTokens: inTok, outputTokens: outTok, itemId });
-      return content;
-    },
-  });
-}
-
-async function enrichWithGemini(prompt, itemId) {
-  return safeCall({
-    provider: "gemini",
-    model: "gemini-2.5-flash-lite",
-    fn: async () => {
-      const content = await callGemini(prompt); // returns text only
-      const inTok = estimateTokensFromText(prompt);
-      const outTok = estimateTokensFromText(content);
-      await logUsage({ stage: "enrich", model: "gemini-2.5-flash-lite", inputTokens: inTok, outputTokens: outTok, itemId });
-      return content;
-    },
-  });
-}
-
-async function enrichWithOpenRouter(prompt, itemId) {
-  return safeCall({
-    provider: "openrouter",
-    model: "rotation",
-    estCost: 0.01,
-    fn: async () => {
-      const { text } = await callWithRotation(prompt, "enrich");
-      const content = text || "";
-      const inTok = estimateTokensFromText(prompt);
-      const outTok = estimateTokensFromText(content);
-      await logUsage({ stage: "enrich", model: "rotation", inputTokens: inTok, outputTokens: outTok, itemId });
-      return content;
-    },
-  });
-}
-
-async function enrichWithDeepSeek(prompt, itemId) {
-  return safeCall({
-    provider: "deepseek",
-    model: "deepseek-chat",
-    estCost: 0.01,
-    fn: async () => {
-      const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "deepseek-chat",
-          temperature: 0.2,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) throw new Error(`DeepSeek error: ${res.status} ${res.statusText}`);
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-      const inTok = estimateTokensFromText(prompt);
-      const outTok = estimateTokensFromText(content);
-      await logUsage({ stage: "enrich", model: "deepseek-chat", inputTokens: inTok, outputTokens: outTok, itemId });
-      return content;
-    },
-  });
-}
-
-async function tryProvidersInOrder(prompt, item) {
-  const attempts = [];
-  for (const fn of [
-    () => enrichWithOpenAI(prompt, item.id),
-    () => enrichWithGemini(prompt, item.id),
-    () => enrichWithOpenRouter(prompt, item.id),
-    () => enrichWithDeepSeek(prompt, item.id),
-  ]) {
-    try {
-      const txt = await fn();
-      if (!txt) continue;
-      const parsed = parseStrictJSON(txt);
-      if (parsed?.summary && parsed?.enrichment && !looksBad(parsed.summary)) {
-        return { parsed, modelChain: attempts.length ? attempts : [] };
-      }
-    } catch (e) {
-      // swallow and continue to next provider
-    }
-    attempts.push("fail");
-  }
-  return null;
-}
-
 // ---------- Main enrichment ----------
 export async function enrich() {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
@@ -311,17 +195,15 @@ export async function enrich() {
       }
 
       const prompt = buildPromptJSON({ item, transcript });
-      const result = await tryProvidersInOrder(prompt, item);
 
-      if (!result) {
-        // final safeguard: set minimal stub but mark for re-try next run
-        log("All providers failed to produce valid JSON", { id: item.id });
-        // Don't mark processed; let a future run try again
-        await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
-        continue;
+      // 🚀 One unified rotation based on config/models.json (enrich list)
+      const { text, model } = await callWithRotation(prompt, "enrich");
+      const parsed = parseStrictJSON(text);
+
+      if (!parsed?.summary || !parsed?.enrichment || looksBad(parsed.summary)) {
+        log("Invalid enrichment output", { id: item.id, model });
+        continue; // let future runs retry
       }
-
-      const { parsed } = result;
 
       // Persist enrichment
       item.summary = parsed.summary;
@@ -334,15 +216,20 @@ export async function enrich() {
         topics: parsed.enrichment?.topics ?? [],
         links: parsed.enrichment?.links ?? [],
         transcript_used: Boolean(transcript),
-        // NOTE: real model names are logged via token-usage; here we just keep an indicator
-        model_chain: ["gpt-5-mini", "gemini-2.5-flash-lite", "rotation", "deepseek-chat"]
+        model_used: model
       };
 
       state.processed.push(item.id);
       await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
       await saveJsonCheckpoint(STATE_FILE, state);
+
+      // log usage even if API didn’t report
+      const inTok = estimateTokensFromText(prompt);
+      const outTok = estimateTokensFromText(text);
+      await logUsage({ stage: "enrich", model, inputTokens: inTok, outputTokens: outTok, itemId: item.id });
+
       processedCount++;
-      log("Enriched item", { id: item.id, yt: Boolean(videoId) });
+      log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
     } catch (err) {
       log("Failed to enrich item", { id: item.id, error: err.message });
     }
