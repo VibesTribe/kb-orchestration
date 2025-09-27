@@ -1,3 +1,5 @@
+// scripts/lib/guardrails.js
+
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -11,14 +13,14 @@ const CAPS = {
   openrouter: Number(process.env.MAX_OPENROUTER_SPEND ?? 5),
 };
 
+// Direct safelist for providers we call *outside* OpenRouter
 const SAFE_MODELS = new Set([
   "gpt-5-nano",
   "gpt-5-mini",
   "gpt-4.0-mini",
   "gemini-2.5-flash-lite",
   "deepseek-chat",
-  // allow the OpenRouter rotating wrapper explicitly
-  "rotation",
+  "rotation", // special wrapper
 ]);
 
 let usage = { openai: 0, gemini: 0, deepseek: 0, openrouter: 0 };
@@ -34,11 +36,16 @@ async function saveKnowledge(data) {
   await fs.writeFile(KNOWLEDGE_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-function ensureSafeModel(model) {
+function ensureSafeModel(model, provider) {
+  // ✅ Allow any OpenRouter model (we rely on rotation + caps there)
+  if (provider === "openrouter") return;
+
+  // For direct providers, require explicit safelist
   if (!SAFE_MODELS.has(model)) {
-    throw new Error(`❌ Unsafe model requested: ${model}`);
+    throw new Error(`❌ Unsafe model requested: ${provider}/${model}`);
   }
 }
+
 function checkCaps(provider, estCost = 0) {
   if (provider === "openai" && usage.openai >= CAPS.openai) return false;
   if (provider === "gemini" && usage.gemini >= CAPS.gemini) return false;
@@ -46,6 +53,7 @@ function checkCaps(provider, estCost = 0) {
   if (provider === "openrouter" && usage.openrouter + estCost > CAPS.openrouter) return false;
   return true;
 }
+
 function recordUsage(provider, estCost = 0) {
   if (provider in usage) usage[provider] += estCost || 1;
 }
@@ -54,12 +62,12 @@ function recordUsage(provider, estCost = 0) {
  * Safely wrap any API call with guardrails.
  * @param {Object} options
  * @param {"openai"|"gemini"|"deepseek"|"openrouter"} options.provider
- * @param {string} options.model - Must be in SAFE_MODELS
+ * @param {string} options.model
  * @param {function} options.fn - Async function that performs the actual call
  * @param {number} [options.estCost=0]
  */
 export async function safeCall({ provider, model, fn, estCost = 0 }) {
-  ensureSafeModel(model);
+  ensureSafeModel(model, provider);
   if (!checkCaps(provider, estCost)) {
     console.log(`⚠️ Skipped ${provider}/${model} (cap reached)`);
     return null;
@@ -69,9 +77,7 @@ export async function safeCall({ provider, model, fn, estCost = 0 }) {
   return result;
 }
 
-/**
- * Process a knowledge item incrementally (unchanged scaffolding)
- */
+// --- Knowledge scaffolding remains unchanged ---
 export async function processItem(item, { summarize, classify }) {
   const kb = await loadKnowledge();
 
