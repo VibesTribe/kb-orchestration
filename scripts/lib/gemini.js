@@ -4,7 +4,8 @@
 
 import fetch from "node-fetch";
 
-const GEMINI_API = process.env.GEMINI_API;
+// Allow GEMINI_API or GEMINI_API_KEY for safety
+const GEMINI_API = process.env.GEMINI_API || process.env.GEMINI_API_KEY;
 if (!GEMINI_API) {
   throw new Error("GEMINI_API is required");
 }
