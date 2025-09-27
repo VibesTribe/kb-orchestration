@@ -1,8 +1,14 @@
+// scripts/classify.js
+// Classification flow using stage-specific rotation from config/models.json.
+// Each item is classified per active project (HIGH / MODERATE / LOW).
+// Saves incrementally after each classification.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callWithRotation } from "./lib/openrouter.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
+import { logUsage, estimateTokensFromText } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -20,7 +26,7 @@ export async function classify() {
 
   // load active projects
   const projects = await loadProjects();
-  const activeProjects = projects.filter(p => p.active);
+  const activeProjects = projects.filter((p) => p.active);
 
   let classifiedCount = 0;
 
@@ -29,10 +35,23 @@ export async function classify() {
 
     for (const project of activeProjects) {
       try {
-        const { text, model } = await callWithRotation(
-          `Classify usefulness for project: ${project.name}\n\nItem:\nTitle: ${item.title}\nSummary: ${item.summary ?? ""}\nDescription: ${item.description ?? ""}\n\nRespond with one of:\n- HIGH (critical)\n- MODERATE (useful but optional)\n- LOW (not useful)\nAlso explain why briefly, and suggest next steps if useful.`,
-          "classify"
-        );
+        const prompt = `
+Classify usefulness for project: ${project.name}
+
+Item:
+Title: ${item.title}
+Summary: ${item.summary ?? ""}
+Description: ${item.description ?? ""}
+
+Respond with:
+- HIGH (critical)
+- MODERATE (useful but optional)
+- LOW (not useful)
+
+Also explain why briefly, and suggest next steps if useful.
+        `.trim();
+
+        const { text, model } = await callWithRotation(prompt, "classify");
 
         item.projects = item.projects ?? [];
         item.projects.push({
@@ -41,22 +60,40 @@ export async function classify() {
           usefulness: parseUsefulness(text),
           reason: extractReason(text),
           nextSteps: extractNextSteps(text),
-          modelUsed: model
+          modelUsed: model,
         });
 
         state.processed.push(item.id);
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
 
+        // log usage (estimated if API didn’t return)
+        const inTok = estimateTokensFromText(prompt);
+        const outTok = estimateTokensFromText(text);
+        await logUsage({
+          stage: "classify",
+          model,
+          inputTokens: inTok,
+          outputTokens: outTok,
+          itemId: item.id,
+        });
+
         log("Classified item", { id: item.id, project: project.name, model });
         classifiedCount++;
       } catch (err) {
-        log("Failed to classify item", { id: item.id, project: project.name, error: err.message });
+        log("Failed to classify item", {
+          id: item.id,
+          project: project.name,
+          error: err.message,
+        });
       }
     }
   }
 
-  log("Classify step complete", { total: knowledge.items.length, classified: classifiedCount });
+  log("Classify step complete", {
+    total: knowledge.items.length,
+    classified: classifiedCount,
+  });
 }
 
 async function loadProjects() {
@@ -91,7 +128,7 @@ function extractNextSteps(text) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  classify().catch(err => {
+  classify().catch((err) => {
     console.error("Classify step failed", err);
     process.exitCode = 1;
   });
