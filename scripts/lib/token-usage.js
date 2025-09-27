@@ -1,68 +1,76 @@
 // scripts/lib/token-usage.js
-// Central logger for token usage across stages (per run, per model, per item)
+// Tracks per-model token usage across pipeline stages.
+// Saves incrementally to data/cache/pipeline-usage.json
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "../..");
-const STATE_FILE = path.join(ROOT, "data/cache/pipeline-usage.json");
+const ROOT_DIR = path.resolve(__dirname, "../..");
+const USAGE_FILE = path.join(ROOT_DIR, "data", "cache", "pipeline-usage.json");
 
+/**
+ * Load usage file (safe fallback).
+ */
 async function loadUsage() {
   try {
-    return JSON.parse(await fs.readFile(STATE_FILE, "utf8"));
+    const text = await fs.readFile(USAGE_FILE, "utf8");
+    return JSON.parse(text);
   } catch {
     return { runs: [] };
   }
 }
 
+/**
+ * Save usage file safely.
+ */
 async function saveUsage(data) {
-  await fs.writeFile(STATE_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-/** Rough token estimator (≈ 4 chars/token) */
-export function estimateTokensFromText(text) {
-  if (!text) return 0;
-  return Math.ceil(String(text).length / 4);
+  await fs.mkdir(path.dirname(USAGE_FILE), { recursive: true });
+  await fs.writeFile(USAGE_FILE, JSON.stringify(data, null, 2));
 }
 
 /**
- * Log usage for a single item or stage
- * @param {Object} params
- * @param {string} params.stage - "enrich" | "classify"
- * @param {string} params.model - model name
- * @param {number} params.inputTokens
- * @param {number} params.outputTokens
- * @param {string} [params.itemId]
+ * Start a new run entry (called once at pipeline start).
  */
-export async function logUsage({ stage, model, inputTokens = 0, outputTokens = 0, itemId }) {
-  const state = await loadUsage();
-  const day = new Date().toISOString().slice(0, 10);
+export async function startUsageRun() {
+  const usage = await loadUsage();
+  const run = {
+    startedAt: new Date().toISOString(),
+    stages: {}, // e.g. { enrich: { "openai/gpt-4.0-mini": { total: 1234 } } }
+  };
+  usage.runs.push(run);
+  await saveUsage(usage);
+}
 
-  let run = state.runs[state.runs.length - 1];
-  if (!run || run.day !== day) {
-    run = { id: new Date().toISOString(), day, stages: {}, items: [] };
-    state.runs.push(run);
+/**
+ * Record a token usage increment.
+ * @param {string} stage - e.g. "enrich", "classify"
+ * @param {string} model - e.g. "openai/gpt-4.0-mini"
+ * @param {number} tokens - number of tokens consumed
+ */
+export async function recordUsage(stage, model, tokens) {
+  if (!tokens || !Number.isFinite(tokens)) return;
+
+  const usage = await loadUsage();
+  if (!usage.runs.length) {
+    usage.runs.push({ startedAt: new Date().toISOString(), stages: {} });
   }
+  const run = usage.runs[usage.runs.length - 1];
 
   if (!run.stages[stage]) run.stages[stage] = {};
-  if (!run.stages[stage][model]) run.stages[stage][model] = { input: 0, output: 0, total: 0 };
+  if (!run.stages[stage][model]) run.stages[stage][model] = { total: 0 };
 
-  run.stages[stage][model].input += inputTokens;
-  run.stages[stage][model].output += outputTokens;
-  run.stages[stage][model].total += inputTokens + outputTokens;
+  run.stages[stage][model].total += tokens;
+  run.updatedAt = new Date().toISOString();
 
-  if (itemId) {
-    run.items.push({
-      id: itemId,
-      stage,
-      model,
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens
-    });
-  }
+  await saveUsage(usage);
+}
 
-  await saveUsage(state);
+/**
+ * Get the latest run (for reporting in digest).
+ */
+export async function getLatestUsageRun() {
+  const usage = await loadUsage();
+  return usage.runs[usage.runs.length - 1] || null;
 }
