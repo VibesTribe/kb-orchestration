@@ -1,20 +1,14 @@
 // scripts/lib/gemini.js
-// Minimal Gemini API helper for YouTube no-transcript fallback
-// Requires GitHub Actions secret: GEMINI_API
+// Minimal Gemini API helper
+// Returns { text, model, tokens }
 
 import fetch from "node-fetch";
 
-// Allow GEMINI_API or GEMINI_API_KEY for safety
 const GEMINI_API = process.env.GEMINI_API || process.env.GEMINI_API_KEY;
 if (!GEMINI_API) {
   throw new Error("GEMINI_API is required");
 }
 
-/**
- * Call Gemini API for a text-only summary.
- * @param {string} prompt
- * @returns {Promise<string>}
- */
 export async function callGemini(prompt) {
   const res = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent",
@@ -36,8 +30,7 @@ export async function callGemini(prompt) {
   }
 
   const data = await res.json();
-  return (
-    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ??
-    "(no summary returned)"
-  );
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "(no output)";
+  const tokens = data?.usageMetadata?.totalTokenCount ?? 0;
+  return { text, model: "gemini-1.5-flash-latest", tokens };
 }
