@@ -1,10 +1,20 @@
 {
-  "models": [
-    "xai/grok-4-f",
-    "deepseek/deepseek-v3.1",
-    "deepseek/deepseek-r1:free",
-    "mistralai/mistral-7b-instruct:latest",
-    "openai/gpt-4.1-mini-oss" 
+  "enrich": [
+    "openai/gpt-5-mini",
+    "gemini/gemini-2.5-flash-lite",
+    "openai/gpt-oss-120b:free",
+    "deepseek/deepseek-chat-v3.1:free",
+    "moonshotai/kimi-k2:free",
+    "qwen/qwen3-coder-480b-a35b:free",
+    "openrouter/rotation"
   ],
-  "__note": "Curated rotation via OpenRouter. Nemotron excluded. GPT-OSS added as a fallback anchor for stable enrichment."
+  "classify": [
+    "openai/gpt-5-mini",
+    "gemini/gemini-2.5-flash-lite",
+    "openai/gpt-oss-120b:free",
+    "deepseek/deepseek-chat-v3.1:free",
+    "moonshotai/kimi-k2:free",
+    "qwen/qwen3-coder-480b-a35b:free",
+    "openrouter/rotation"
+  ]
 }
