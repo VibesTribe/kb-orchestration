@@ -1,5 +1,6 @@
 // scripts/lib/openrouter.js
 // Unified model caller with round-robin fallback.
+// Supports stage-specific model lists (enrich vs classify).
 // Routes OpenAI + Gemini models to their native APIs,
 // everything else goes through OpenRouter.
 
@@ -20,22 +21,19 @@ if (!OPENROUTER_API_KEY) {
   throw new Error("OPENROUTER_API_KEY is required");
 }
 
-let models = [];
-let roundRobinIndex = 0;
+let modelsConfig = null;
+let roundRobinIndices = { enrich: 0, classify: 0 };
 
-// --- Load model list from config ---
+// --- Load model config once ---
 async function loadModels() {
-  if (models.length) return models;
+  if (modelsConfig) return modelsConfig;
   const text = await fs.readFile(MODELS_PATH, "utf8");
   const json = JSON.parse(text);
-
-  if (!Array.isArray(json.enrich) && !Array.isArray(json.classify)) {
-    throw new Error("config/models.json must contain arrays for 'enrich' and/or 'classify'");
+  if (!json.enrich || !json.classify) {
+    throw new Error("config/models.json must contain 'enrich' and 'classify' arrays");
   }
-
-  // Default: combine both lists if only one is needed
-  models = json.enrich || json.classify || [];
-  return models;
+  modelsConfig = json;
+  return modelsConfig;
 }
 
 // --- OpenAI direct call ---
@@ -77,7 +75,7 @@ async function callDirectGemini(model, prompt) {
   if (!res.ok) throw new Error(`Gemini error: ${res.status} ${res.statusText}`);
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  return { text, tokens: 0 }; // Gemini doesn’t return usage reliably
+  return { text, tokens: 0 }; // Gemini rarely returns usage
 }
 
 // --- OpenRouter call ---
@@ -94,9 +92,7 @@ async function callOpenRouter(model, prompt) {
     })
   });
 
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
 
   const data = await response.json();
   const text = data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -115,13 +111,17 @@ async function callModel(model, prompt) {
   return callOpenRouter(model, prompt);
 }
 
-// --- Round robin rotation across models ---
-export async function callWithRotation(prompt, purpose = "enrich") {
-  const modelList = await loadModels();
-  if (!modelList.length) throw new Error("No models in config/models.json");
+// --- Round robin rotation (stage-specific) ---
+export async function callWithRotation(prompt, stage = "enrich") {
+  const cfg = await loadModels();
+  const modelList = cfg[stage];
+  if (!modelList || !modelList.length) {
+    throw new Error(`No models configured for stage '${stage}'`);
+  }
 
-  const startIndex = roundRobinIndex;
-  roundRobinIndex = (roundRobinIndex + 1) % modelList.length;
+  let index = roundRobinIndices[stage];
+  const startIndex = index;
+  roundRobinIndices[stage] = (index + 1) % modelList.length;
 
   for (let i = 0; i < modelList.length; i++) {
     const model = modelList[(startIndex + i) % modelList.length];
@@ -129,9 +129,9 @@ export async function callWithRotation(prompt, purpose = "enrich") {
       const result = await callModel(model, prompt);
       return { ...result, model };
     } catch (err) {
-      console.warn(`[openrouter] ${purpose} failed with ${model}: ${err.message}`);
+      console.warn(`[openrouter] ${stage} failed with ${model}: ${err.message}`);
     }
   }
 
-  throw new Error(`All models failed for ${purpose}`);
+  throw new Error(`All models failed for stage '${stage}'`);
 }
