@@ -16,26 +16,35 @@ if (!OPENROUTER_API_KEY) {
   throw new Error("OPENROUTER_API_KEY is required");
 }
 
-let models = [];
-let roundRobinIndex = 0;
+let modelConfig = null;
+let roundRobinIndices = {}; // track separately for enrich, classify, etc.
 
-async function loadModels() {
-  if (models.length) return models;
+async function loadModelsConfig() {
+  if (modelConfig) return modelConfig;
   const text = await fs.readFile(MODELS_PATH, "utf8");
-  const json = JSON.parse(text);
-  if (!json.models || !Array.isArray(json.models)) {
-    throw new Error("config/models.json must have a 'models' array");
-  }
-  models = json.models;
-  return models;
+  modelConfig = JSON.parse(text);
+  return modelConfig;
 }
 
 export async function callWithRotation(prompt, purpose = "enrich") {
-  const modelList = await loadModels();
-  if (!modelList.length) throw new Error("No models in config/models.json");
+  const config = await loadModelsConfig();
 
-  const startIndex = roundRobinIndex;
-  roundRobinIndex = (roundRobinIndex + 1) % modelList.length;
+  // Support both old and new shapes of models.json
+  let modelList = [];
+  if (Array.isArray(config.models)) {
+    modelList = config.models;
+  } else if (Array.isArray(config[purpose])) {
+    modelList = config[purpose];
+  }
+
+  if (!modelList.length) {
+    throw new Error(`No models defined for purpose '${purpose}' in config/models.json`);
+  }
+
+  // Round robin index per purpose
+  if (!(purpose in roundRobinIndices)) roundRobinIndices[purpose] = 0;
+  const startIndex = roundRobinIndices[purpose];
+  roundRobinIndices[purpose] = (startIndex + 1) % modelList.length;
 
   for (let i = 0; i < modelList.length; i++) {
     const model = modelList[(startIndex + i) % modelList.length];
@@ -69,7 +78,6 @@ async function callOpenRouter(model, prompt) {
 
   const data = await response.json();
   const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-  const tokens = data.usage?.total_tokens ?? 0; // safe if missing
+  const tokens = data.usage?.total_tokens ?? 0; // fallback if usage missing
   return { text, tokens };
 }
-
