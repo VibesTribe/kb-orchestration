@@ -1,105 +1,75 @@
 // scripts/lib/token-usage.js
-// Track and log token usage by stage/model/item into data/cache/pipeline-usage.json
+// Centralized token usage logging with fallback to estimation.
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const ROOT = path.resolve(__dirname, "../..");
-const USAGE_FILE = path.join(ROOT, "data/cache/pipeline-usage.json");
+const ROOT = path.resolve(process.cwd(), "data/cache");
+const USAGE_FILE = path.join(ROOT, "pipeline-usage.json");
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-/**
- * Rough token estimator based on word/character count.
- * This is used if an API doesn’t return usage stats.
- */
-export function estimateTokensFromText(text) {
+// --- Util: naive token estimator ---
+export function estimateTokensFromText(text = "") {
   if (!text) return 0;
-  const words = text.split(/\s+/).length;
-  const chars = text.length;
-  return Math.max(Math.round(words / 0.75), Math.round(chars / 4));
+  // Roughly 4 chars per token on average
+  return Math.ceil(text.length / 4);
 }
 
 /**
- * Log raw usage stats.
- * stage: e.g. "enrich", "classify"
- * model: model name/id
- * inputTokens / outputTokens: numbers
- * itemId: knowledge item id
+ * Append usage stats for a single item + stage.
+ * @param {Object} params
+ * @param {"enrich"|"classify"} params.stage
+ * @param {string} params.model
+ * @param {string} params.itemId
+ * @param {number} [params.inputTokens]
+ * @param {number} [params.outputTokens]
+ * @param {Object} [params.rawUsage] - Optional raw usage object from API
  */
-export async function logUsage({ stage, model, inputTokens = 0, outputTokens = 0, itemId }) {
-  let usage = { runs: [] };
+export async function logUsage({
+  stage,
+  model,
+  itemId,
+  inputTokens,
+  outputTokens,
+  rawUsage = {}
+}) {
+  await fs.mkdir(ROOT, { recursive: true });
+
+  let log;
   try {
-    usage = JSON.parse(await fs.readFile(USAGE_FILE, "utf8"));
+    log = JSON.parse(await fs.readFile(USAGE_FILE, "utf8"));
   } catch {
-    // first run
+    log = { runs: [] };
   }
 
-  if (!usage.runs.length || usage.runs[usage.runs.length - 1].finished) {
-    usage.runs.push({
-      started: nowIso(),
-      stages: {},
-      finished: false,
-    });
+  if (!log.runs.length) {
+    log.runs.push({ ts: new Date().toISOString(), stages: {} });
   }
+  const run = log.runs[log.runs.length - 1];
 
-  const run = usage.runs[usage.runs.length - 1];
   if (!run.stages[stage]) run.stages[stage] = {};
   if (!run.stages[stage][model]) {
-    run.stages[stage][model] = { total: 0, items: [] };
+    run.stages[stage][model] = { total: 0, details: [] };
   }
 
-  const record = run.stages[stage][model];
-  const total = inputTokens + outputTokens;
-  record.total += total;
-  record.items.push({
+  // Prefer raw API counts, fall back to provided, then estimates
+  const inTok =
+    rawUsage.prompt_tokens ??
+    inputTokens ??
+    estimateTokensFromText("");
+  const outTok =
+    rawUsage.completion_tokens ??
+    outputTokens ??
+    estimateTokensFromText("");
+  const total = rawUsage.total_tokens ?? inTok + outTok;
+
+  run.stages[stage][model].total += total;
+  run.stages[stage][model].details.push({
     itemId,
-    input: inputTokens,
-    output: outputTokens,
+    input: inTok,
+    output: outTok,
     total,
-    ts: nowIso(),
+    ts: new Date().toISOString(),
   });
 
-  await fs.mkdir(path.dirname(USAGE_FILE), { recursive: true });
-  await fs.writeFile(USAGE_FILE, JSON.stringify(usage, null, 2), "utf8");
-}
-
-/**
- * Convenience helper: logs usage with token estimates if API didn’t provide them.
- * @param {string} stage - e.g. "enrich" or "classify"
- * @param {string} model - model name/id
- * @param {string} prompt - input text
- * @param {string} output - output text
- * @param {string} itemId - knowledge item ID
- * @param {object} [usage] - optional { prompt_tokens, completion_tokens }
- */
-export async function logStageUsage(stage, model, prompt, output, itemId, usage = {}) {
-  const inTok = usage.prompt_tokens ?? estimateTokensFromText(prompt);
-  const outTok = usage.completion_tokens ?? estimateTokensFromText(output);
-  await logUsage({
-    stage,
-    model,
-    inputTokens: inTok,
-    outputTokens: outTok,
-    itemId,
-  });
-}
-
-/**
- * Mark the current run as finished (optional, called at end of pipeline)
- */
-export async function finishUsageRun() {
-  let usage = { runs: [] };
-  try {
-    usage = JSON.parse(await fs.readFile(USAGE_FILE, "utf8"));
-  } catch {
-    return;
-  }
-  if (!usage.runs.length) return;
-  const run = usage.runs[usage.runs.length - 1];
-  run.finished = true;
-  run.ended = nowIso();
-  await fs.writeFile(USAGE_FILE, JSON.stringify(usage, null, 2), "utf8");
+  await fs.writeFile(USAGE_FILE, JSON.stringify(log, null, 2), "utf8");
 }
