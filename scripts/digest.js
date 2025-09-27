@@ -16,6 +16,7 @@ const ROOT_DIR = path.resolve(__dirname, "..");
 const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
 const DIGEST_ROOT = path.join(ROOT_DIR, "data", "digest");
 const PROJECTS_ROOT = path.join(ROOT_DIR, "projects");
+const USAGE_FILE = path.join(ROOT_DIR, "data", "cache", "pipeline-usage.json");
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
@@ -26,6 +27,35 @@ function log(message, context = {}) {
   const timestamp = new Date().toISOString();
   const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
   console.log(`[${timestamp}] ${message}${payload}`);
+}
+
+/**
+ * Convert tokens to a compact "~19.3k" style string.
+ */
+function tokensToK(total) {
+  if (!total || typeof total !== "number" || !isFinite(total)) return "0k";
+  return `${Math.round(total / 100) / 10}k`;
+}
+
+/**
+ * Build a per-model total across all stages from payload.tokenUsage
+ * tokenUsage shape:
+ * {
+ *   enrich: { modelA: { total }, modelB: { total } },
+ *   classify: { modelA: { total }, ... },
+ *   totalTokens: <number>
+ * }
+ */
+function modelTotalsFromTokenUsage(tokenUsage) {
+  const map = new Map();
+  for (const [stage, models] of Object.entries(tokenUsage || {})) {
+    if (stage === "totalTokens") continue;
+    for (const [model, stats] of Object.entries(models || {})) {
+      const prev = map.get(model) || 0;
+      map.set(model, prev + (stats?.total || 0));
+    }
+  }
+  return map; // Map<model, totalTokens>
 }
 
 export async function digest() {
@@ -53,6 +83,7 @@ export async function digest() {
     projects: []
   };
 
+  // Build per-project sections and checkpoint after each to preserve progress
   for (const [projectKey, project] of projectMap.entries()) {
     if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
@@ -78,6 +109,21 @@ export async function digest() {
     await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
 
     log("Checkpoint saved", { project: project.name });
+  }
+
+  // Attach token usage for footer (safe if file missing)
+  const usage = await loadJson(USAGE_FILE, { runs: [] });
+  const latestRun = usage.runs?.[usage.runs.length - 1];
+  if (latestRun?.stages) {
+    const totalTokens = Object.values(latestRun.stages)
+      .flatMap((stage) => Object.values(stage || {}))
+      .reduce((sum, m) => sum + (m?.total || 0), 0);
+
+    digestPayload.tokenUsage = { ...latestRun.stages, totalTokens };
+    // Re-save artifacts so the footer appears in the final files
+    await saveJsonCheckpoint(jsonPath, digestPayload);
+    await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+    await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
   }
 
   log("Digest artifacts prepared", {
@@ -161,7 +207,9 @@ function renderTextDigest(payload) {
 
   lines.push("Daily Digest");
   lines.push(dateStr);
-  lines.push(`News You Can Use Today:\n${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`);
+  lines.push(
+    `News You Can Use Today:\n${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
+  );
   lines.push("");
 
   for (const project of payload.projects) {
@@ -190,6 +238,19 @@ function renderTextDigest(payload) {
 
   lines.push("You can still browse all recent updates, even those not flagged as useful:");
   lines.push("View this digest on KB-site: https://vibestribe.github.io/kb-site/");
+  lines.push("");
+
+  // ---- Token usage footer (optional) ----
+  if (payload.tokenUsage && payload.tokenUsage.totalTokens) {
+    const modelTotals = modelTotalsFromTokenUsage(payload.tokenUsage);
+    const parts = [];
+    for (const [model, total] of modelTotals.entries()) {
+      parts.push(`${model} ${tokensToK(total)}`);
+    }
+    lines.push(
+      `Token usage this run: ~${tokensToK(payload.tokenUsage.totalTokens)} (${parts.join(", ")}).`
+    );
+  }
 
   return lines.join("\n");
 }
@@ -207,9 +268,97 @@ function formatTextEntry(entry) {
 
 // --- HTML RENDERING ---
 function renderHtmlDigest(payload) {
-  // (unchanged, full styled HTML from your working version)
-  // ... same code as in your good copy ...
-  // (keeping brevity here, but include the styled template you pasted earlier)
+  // A clean, self-contained HTML with a token-usage footer.
+  // If you already have a preferred template, you can replace just this function's body.
+
+  const esc = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+
+  const section = (title) => `
+    <h3 style="margin:16px 0 8px 0;">${esc(title)}</h3>
+  `;
+
+  const entryHtml = (e) => `
+    <div style="margin:8px 0 16px 0; line-height:1.4;">
+      <div style="font-weight:600;">${esc(e.title)}</div>
+      ${e.summary ? `<div>${esc(e.summary)}</div>` : ""}
+      ${e.reason ? `<div><em>Why it matters:</em> ${esc(e.reason)}</div>` : ""}
+      ${e.nextSteps ? `<div><em>Next steps:</em> ${esc(e.nextSteps)}</div>` : ""}
+      ${e.publishedAt ? `<div><em>Published:</em> ${esc(e.publishedAt)}</div>` : ""}
+      ${e.url ? `<div><a href="${esc(e.url)}" target="_blank" rel="noopener">Go to source</a></div>` : ""}
+    </div>
+  `;
+
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${esc(payload.subject || "Daily Digest")}</title>
+</head>
+<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#111; margin:0; padding:0; background:#f7f7f8;">
+  <div style="max-width:720px; margin:0 auto; padding:24px;">
+    <h1 style="margin:0 0 6px 0;">Daily Digest</h1>
+    <div style="color:#555; margin-bottom:16px;">${esc(dateStr)}</div>
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-bottom:16px;">
+      <div style="font-weight:600; margin-bottom:8px;">News You Can Use Today</div>
+      <div>${esc(`${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`)}</div>
+    </div>
+`;
+
+  for (const project of payload.projects) {
+    html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px 0;">
+      <h2 style="margin:0 0 6px 0;">${esc(project.name)}</h2>
+      ${project.summary ? `<div style="color:#444; margin-bottom:8px;">${esc(project.summary)}</div>` : ""}
+
+      ${project.high?.length ? section("Highly Useful") : ""}
+      ${project.high?.map(entryHtml).join("") || ""}
+
+      ${project.moderate?.length ? section("Moderately Useful") : ""}
+      ${project.moderate?.map(entryHtml).join("") || ""}
+
+      ${project.changelog?.length ? section("Recent Changelog Notes") : ""}
+      ${
+        project.changelog?.slice(0, 5).map(n => `<div>- ${esc(n)}</div>`).join("") || ""
+      }
+    </div>`;
+  }
+
+  html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px 0;">
+      <div>You can still browse all recent updates, even those not flagged as useful.</div>
+      <div><a href="https://vibestribe.github.io/kb-site/" target="_blank" rel="noopener">View this digest on KB-site</a></div>
+    </div>
+`;
+
+  // ---- Token usage footer (optional) ----
+  if (payload.tokenUsage && payload.tokenUsage.totalTokens) {
+    const modelTotals = modelTotalsFromTokenUsage(payload.tokenUsage);
+    const parts = [];
+    for (const [model, total] of modelTotals.entries()) {
+      parts.push(`${esc(model)} ${esc(tokensToK(total))}`);
+    }
+    html += `
+    <p style="color:#777; font-size:0.9em; margin:0 0 24px 0;">
+      Token usage this run: ~${esc(tokensToK(payload.tokenUsage.totalTokens))} (${parts.join(", ")}).
+    </p>`;
+  }
+
+  html += `
+  </div>
+</body>
+</html>`;
+
+  return html;
 }
 
 // --- Brevo Email ---
