@@ -45,9 +45,9 @@ jobs:
           BREVO_TO: ${{ secrets.BREVO_TO }}
           ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
 
-          # New AI provider keys
+          # New AI provider keys (aligned with code)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API: ${{ secrets.GEMINI_API }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
           # Hard caps (for guardrails.js)
