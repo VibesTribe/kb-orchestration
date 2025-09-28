@@ -8,7 +8,11 @@
 //       "ts": "...",
 //       "stages": {
 //         "enrich": {
-//           "<model>": { "total": 1234, "details": [ { itemId, input, output, total, ts } ] }
+//           "<model>": {
+//             "total": 1234,
+//             "provider": "openinference",   // optional
+//             "details": [ { itemId, input, output, total, ts } ]
+//           }
 //         },
 //         "classify": { ... }
 //       }
@@ -37,9 +41,16 @@ export function estimateTokensFromText(text = "") {
  * @param {string} prompt
  * @param {string} completion
  * @param {string} itemId
- * @param {object|null} rawUsage  (optional: {prompt_tokens, completion_tokens, total_tokens})
+ * @param {object|null} rawUsage  (optional: {prompt_tokens, completion_tokens, total_tokens, provider?})
  */
-export async function logStageUsage(stage, model, prompt, completion, itemId, rawUsage = null) {
+export async function logStageUsage(
+  stage,
+  model,
+  prompt,
+  completion,
+  itemId,
+  rawUsage = null
+) {
   await fs.mkdir(ROOT, { recursive: true });
 
   let log;
@@ -55,11 +66,18 @@ export async function logStageUsage(stage, model, prompt, completion, itemId, ra
   const run = log.runs[log.runs.length - 1];
 
   if (!run.stages[stage]) run.stages[stage] = {};
-  if (!run.stages[stage][model]) run.stages[stage][model] = { total: 0, details: [] };
+  if (!run.stages[stage][model]) {
+    run.stages[stage][model] = { total: 0, details: [] };
+  }
 
-  const inTok  = rawUsage?.prompt_tokens ?? estimateTokensFromText(prompt);
+  const inTok = rawUsage?.prompt_tokens ?? estimateTokensFromText(prompt);
   const outTok = rawUsage?.completion_tokens ?? estimateTokensFromText(completion);
-  const total  = rawUsage?.total_tokens ?? (inTok + outTok);
+  const total = rawUsage?.total_tokens ?? inTok + outTok;
+
+  // Merge provider info if present
+  if (rawUsage?.provider) {
+    run.stages[stage][model].provider = rawUsage.provider;
+  }
 
   run.stages[stage][model].total += total;
   run.stages[stage][model].details.push({
