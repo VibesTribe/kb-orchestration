@@ -1,46 +1,52 @@
 {
   "name": "Vibeflow",
   "status": "active",
-  "summary": "Human-in-the-loop AI orchestration system that keeps non-technical users in strategic control while automating modular agent workflows.",
+  "summary": "Human-in-the-loop AI orchestration system that coordinates modular agents across any external AI platform, with a real-time dashboard and strict safety/validation.",
   "objectives": [
     "Deliver lean, observable AI-assisted development workflows",
-    "Avoid bloat and vendor lock-in by choosing modular tools",
-    "Keep humans in control of planning, approvals, and production gates"
+    "Avoid bloat and vendor lock-in with modular integrations",
+    "Keep humans in control of planning, approvals, and production gates",
+    "Continuously self-improve via Research and Maintenance agents",
+    "Minimize costs and maximize quality by routing tasks to best-fit platforms"
   ],
   "techStack": [
     "TypeScript",
     "React",
     "Tailwind CSS",
     "Node.js",
-    "Express",
-    "PostgreSQL",
+    "Supabase or PostgreSQL",
     "Docker",
-    "Google Cloud Run"
+    "GitHub Actions",
+    "External AI platforms (OpenAI, Gemini, Claude, DeepSeek, OpenRouter, local LLMs)"
   ],
   "usefulnessCriteria": {
     "high": [
-      "Directly improves agent orchestration, observability, or ROI analytics",
-      "Replaces heavy platforms with lean, modular alternatives aligned with Vibeflow philosophy",
-      "Provides actionable guidance for Supervisor, Analyst, or Maintenance agents"
+      "Directly improves orchestration, observability, safety, or task validation",
+      "Enables leveraging multiple AI platforms with no vendor lock-in",
+      "Provides actionable guidance for Research, Planner, Supervisor, Watcher, or Maintenance agents"
     ],
     "moderate": [
-      "General AI tooling or workflow insights that can be adapted soon",
-      "Emerging research that could influence near-term planning or architecture",
-      "Design patterns that reinforce human-in-the-loop governance"
+      "General AI workflow insights adaptable to Vibeflow",
+      "Research or tools that could influence near-term strategy",
+      "Design patterns reinforcing human-in-the-loop governance"
     ],
     "archive": [
       "Interesting but not actionable within the next quarter",
-      "Tools or ideas that conflict with Vibeflow’s lean, modular stance",
-      "Content unrelated to software agent orchestration or non-coder empowerment"
+      "Conflicts with Vibeflowâ€™s lean, modular stance",
+      "Unrelated to orchestration or non-coder empowerment"
     ]
   },
   "promptHints": {
-    "classification": "Decide if the item is High, Moderate, or Archive usefulness for Vibeflow. Use the PRD and criteria to justify the rating, and suggest next steps when appropriate."
+    "classification": "Decide if the item is High, Moderate, or Archive usefulness for Vibeflow. Justify the rating using the PRD and criteria. Suggest next steps if useful."
   },
   "sourceDocs": [
     {
       "type": "PRD",
       "path": "./prd.md"
+    },
+    {
+      "type": "CHANGELOG",
+      "path": "./changelog.md"
     }
   ]
 }
