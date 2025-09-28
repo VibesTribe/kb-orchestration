@@ -1,16 +1,16 @@
 {
   "enrich": [
-    "deepseek/deepseek-v3.1",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3-coder-480b-a35b",
-    "moonshotai/kimi-k2",
+    "deepseek/deepseek-chat-v3.1:free",
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen2-72b-instruct:free",
+    "moonshotai/kimi-k2:free",
     "openrouter/rotation"
   ],
   "classify": [
-    "deepseek/deepseek-v3.1",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3-coder-480b-a35b",
-    "moonshotai/kimi-k2",
+    "deepseek/deepseek-chat-v3.1:free",
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen2-72b-instruct:free",
+    "moonshotai/kimi-k2:free",
     "openrouter/rotation"
   ]
 }
