@@ -1,6 +1,6 @@
 // scripts/lib/openrouter.js
-// Call OpenRouter models with round-robin fallback.
-// Returns { text, model, tokens, usage }
+// Stage-specific OpenRouter rotation with real usage passthrough.
+// Returns { text, model, tokens, rawUsage }
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,67 +16,79 @@ if (!OPENROUTER_API_KEY) {
   throw new Error("OPENROUTER_API_KEY is required");
 }
 
-let models = [];
-let roundRobinIndex = 0;
+// Cache of config + per-stage round-robin pointers
+let configCache = null;
+const rrIndex = new Map(); // stage -> index
 
-async function loadModels() {
-  if (models.length) return models;
-  const text = await fs.readFile(MODELS_PATH, "utf8");
-  const json = JSON.parse(text);
-  if (!json.models || !Array.isArray(json.models)) {
-    throw new Error("config/models.json must have a 'models' array");
-  }
-  models = json.models;
-  return models;
+async function loadConfig() {
+  if (configCache) return configCache;
+  const raw = await fs.readFile(MODELS_PATH, "utf8");
+  configCache = JSON.parse(raw);
+  return configCache;
 }
 
-export async function callWithRotation(prompt, purpose = "enrich") {
-  const modelList = await loadModels();
-  if (!modelList.length) throw new Error("No models in config/models.json");
+function pickListForStage(cfg, stage) {
+  // Prefer explicit stage list; fall back to generic "models"
+  const list = Array.isArray(cfg?.[stage]) ? cfg[stage]
+             : Array.isArray(cfg?.models) ? cfg.models
+             : null;
+  if (!list || !list.length) {
+    throw new Error(`No models configured for stage "${stage}" in config/models.json`);
+  }
+  // Filter out our sentinel (not a real model on OpenRouter)
+  return list.filter(m => m !== "openrouter/rotation");
+}
 
-  const startIndex = roundRobinIndex;
-  roundRobinIndex = (roundRobinIndex + 1) % modelList.length;
+export async function callWithRotation(prompt, stage = "enrich") {
+  const cfg = await loadConfig();
+  const models = pickListForStage(cfg, stage);
 
-  for (let i = 0; i < modelList.length; i++) {
-    const model = modelList[(startIndex + i) % modelList.length];
+  const start = rrIndex.get(stage) ?? 0;
+  rrIndex.set(stage, (start + 1) % models.length);
+
+  for (let i = 0; i < models.length; i++) {
+    const model = models[(start + i) % models.length];
     try {
-      const result = await callOpenRouter(model, prompt);
-      return { ...result, model };
+      const { text, rawUsage } = await callOpenRouter(model, prompt);
+      const usage = rawUsage ?? {};
+      const tokens = {
+        prompt: usage.prompt_tokens ?? 0,
+        completion: usage.completion_tokens ?? 0,
+        total: usage.total_tokens ?? 0,
+      };
+      return { text, model, tokens, rawUsage: usage };
     } catch (err) {
-      console.warn(`[openrouter] ${purpose} failed with ${model}: ${err.message}`);
+      console.warn(`[openrouter] ${stage} failed with ${model}: ${err.message}`);
+      // try next model
     }
   }
 
-  throw new Error(`All OpenRouter models failed for ${purpose}`);
+  throw new Error(`All OpenRouter models failed for stage "${stage}"`);
 }
 
 async function callOpenRouter(model, prompt) {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       model,
-      messages: [{ role: "user", content: prompt }]
-    })
+      messages: [{ role: "user", content: prompt }],
+    }),
   });
 
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+  if (!res.ok) {
+    const body = await safeText(res);
+    throw new Error(`${res.status} ${res.statusText}${body ? ` – ${body.slice(0, 200)}` : ""}`);
   }
 
-  const data = await response.json();
+  const data = await res.json();
   const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+  return { text, rawUsage: data.usage ?? {} };
+}
 
-  // ✅ Try to capture real usage if available
-  const usage = data.usage ?? {};
-  const tokens = {
-    prompt: usage.prompt_tokens ?? 0,
-    completion: usage.completion_tokens ?? 0,
-    total: usage.total_tokens ?? 0,
-  };
-
-  return { text, tokens, usage };
+async function safeText(res) {
+  try { return await res.text(); } catch { return ""; }
 }
