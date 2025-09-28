@@ -11,7 +11,7 @@ import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
-import { logUsage, estimateTokensFromText } from "./lib/token-usage.js";
+import { logStageUsage } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -186,9 +186,7 @@ export async function enrich() {
       if (videoId) {
         try {
           transcript = await fetchTranscriptTimedText(videoId);
-          if (transcript) {
-            item.transcript = transcript;
-          }
+          if (transcript) item.transcript = transcript;
         } catch (e) {
           log("Transcript fetch failed", { id: item.id, error: e.message });
         }
@@ -196,13 +194,15 @@ export async function enrich() {
 
       const prompt = buildPromptJSON({ item, transcript });
 
-      // 🚀 One unified rotation based on config/models.json (enrich list)
-      const { text, model } = await callWithRotation(prompt, "enrich");
+      // 🚀 Stage-specific rotation from config/models.json ("enrich")
+      const { text, model, rawUsage } = await callWithRotation(prompt, "enrich");
       const parsed = parseStrictJSON(text);
 
       if (!parsed?.summary || !parsed?.enrichment || looksBad(parsed.summary)) {
         log("Invalid enrichment output", { id: item.id, model });
-        continue; // let future runs retry
+        // don't mark processed; allow retry next run
+        await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+        continue;
       }
 
       // Persist enrichment
@@ -216,17 +216,15 @@ export async function enrich() {
         topics: parsed.enrichment?.topics ?? [],
         links: parsed.enrichment?.links ?? [],
         transcript_used: Boolean(transcript),
-        model_used: model
+        model_used: model,
       };
 
       state.processed.push(item.id);
       await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
       await saveJsonCheckpoint(STATE_FILE, state);
 
-      // log usage even if API didn’t report
-      const inTok = estimateTokensFromText(prompt);
-      const outTok = estimateTokensFromText(text);
-      await logUsage({ stage: "enrich", model, inputTokens: inTok, outputTokens: outTok, itemId: item.id });
+      // Unified usage logging (real counts if available, else estimate)
+      await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
 
       processedCount++;
       log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
