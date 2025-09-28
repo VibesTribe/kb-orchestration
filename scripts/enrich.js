@@ -11,6 +11,8 @@ import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
+import { callOpenAI } from "./lib/openai.js";
+import { callDeepSeek } from "./lib/deepseek.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
 
@@ -18,10 +20,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const KNOWLEDGE_FILE = path.join(ROOT, "data", "knowledge.json");
 const STATE_FILE = path.join(ROOT, "data/cache/enrich-state.json");
-
-// ---- Direct provider env (no new files needed) ----
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
 
 // ---------- Logging ----------
 function log(msg, ctx = {}) {
@@ -170,69 +168,6 @@ function parseStrictJSON(txt) {
   return null;
 }
 
-// ---------- Direct provider helpers (inline to avoid extra files) ----------
-async function callOpenAIChat(prompt, models = ["gpt-4o-mini", "gpt-4.0-mini"]) {
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
-  let lastErr;
-  for (const model of models) {
-    try {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.2
-        })
-      });
-      if (!res.ok) {
-        const t = await safeText(res);
-        throw new Error(`OpenAI ${model} error: ${res.status} ${res.statusText}${t ? ` – ${t.slice(0, 400)}` : ""}`);
-      }
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content?.trim() ?? "";
-      const usage = data?.usage ?? {};
-      const tokens = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
-      return { text, model, rawUsage: usage, tokens };
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("OpenAI call failed");
-}
-
-async function callDeepSeekChat(prompt, model = "deepseek-chat") {
-  if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY missing");
-  const res = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2
-    })
-  });
-  if (!res.ok) {
-    const t = await safeText(res);
-    throw new Error(`DeepSeek error: ${res.status} ${res.statusText}${t ? ` – ${t.slice(0, 400)}` : ""}`);
-  }
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content?.trim() ?? "";
-  const usage = data?.usage ?? {};
-  const tokens = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
-  return { text, model, rawUsage: usage, tokens };
-}
-
-async function safeText(res) {
-  try { return await res.text(); } catch { return ""; }
-}
-
 // ---------- Main enrichment ----------
 export async function enrich(options = {}) {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
@@ -267,15 +202,15 @@ export async function enrich(options = {}) {
       let rawUsage = null;
 
       try {
-        const r = await callGemini(prompt); // gemini-2.5-flash-lite in your lib
+        const r = await callGemini(prompt); // gemini-2.5-flash-lite
         text = r.text;
         model = r.model;
-        rawUsage = { total_tokens: r.tokens ?? 0 };
+        rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
         log("Used Gemini for enrichment", { id: item.id, model });
       } catch (e1) {
         log("Gemini failed; fallback to OpenAI", { id: item.id, error: e1.message });
         try {
-          const r = await callOpenAIChat(prompt);
+          const r = await callOpenAI(prompt);
           text = r.text;
           model = r.model;
           rawUsage = r.rawUsage ?? null;
@@ -286,11 +221,11 @@ export async function enrich(options = {}) {
             const r = await callWithRotation(prompt, "enrich");
             text = r.text;
             model = r.model;
-            rawUsage = r.rawUsage ?? null;
-            log("Used OpenRouter for enrichment", { id: item.id, model });
+            rawUsage = { ...r.rawUsage, provider: r.provider || r.rawUsage?.provider || "openrouter" };
+            log("Used OpenRouter for enrichment", { id: item.id, model, provider: r.provider });
           } catch (e3) {
             log("OpenRouter failed; fallback to DeepSeek (direct)", { id: item.id, error: e3.message });
-            const r = await callDeepSeekChat(prompt, "deepseek-chat");
+            const r = await callDeepSeek(prompt);
             text = r.text;
             model = r.model;
             rawUsage = r.rawUsage ?? null;
@@ -301,7 +236,6 @@ export async function enrich(options = {}) {
 
       const parsed = parseStrictJSON(text);
 
-      // Be tolerant: accept either "full_summary" + "summary", or a single "summary"
       const fullSummary =
         parsed?.full_summary ??
         parsed?.fullSummary ??
@@ -316,12 +250,10 @@ export async function enrich(options = {}) {
         log("Invalid enrichment output (fullSummary)", { id: item.id, model });
         fullyFailed = true;
       } else {
-        // Persist enrichment into knowledge.json
         item.fullSummary = fullSummary;
         if (shortSummary && !looksBad(shortSummary)) {
           item.summary = shortSummary;
         } else {
-          // derive a short blurb from the full one (first ~2 sentences)
           const s = fullSummary.replace(/\s+/g, " ").trim();
           item.summary = s.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
         }
@@ -338,16 +270,14 @@ export async function enrich(options = {}) {
           model_used: model
         };
 
-        // Mark processed only on success
         state.processed.push(item.id);
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
 
-        // Usage logging (best-effort)
         await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
 
         processedCount++;
-        consecutiveFails = 0; // reset since we succeeded
+        consecutiveFails = 0;
         log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
       }
     } catch (err) {
@@ -362,7 +292,7 @@ export async function enrich(options = {}) {
           `Fail-fast: ${consecutiveFails} consecutive items failed to enrich across all providers`
         );
       }
-      // Save checkpoints even on failure (so restarts keep progress)
+      // Preserve progress on failure, too
       const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
       await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
       await saveJsonCheckpoint(STATE_FILE, await loadJson(STATE_FILE, { processed: [] }));
