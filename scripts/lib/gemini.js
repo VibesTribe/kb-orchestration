@@ -10,10 +10,11 @@ if (!GEMINI_API) {
   console.error("DEBUG: GEMINI_API is missing or empty.");
   throw new Error("GEMINI_API is required");
 } else {
-  // Print only the length and first 3 characters, mask the rest
-  const masked = GEMINI_API.length > 3
-    ? GEMINI_API.slice(0, 3) + "..." + ` (len=${GEMINI_API.length})`
-    : `(len=${GEMINI_API.length})`;
+  // Masked debug: show only first 3 chars and total length
+  const masked =
+    GEMINI_API.length > 3
+      ? GEMINI_API.slice(0, 3) + "..." + ` (len=${GEMINI_API.length})`
+      : `(len=${GEMINI_API.length})`;
   console.error("DEBUG: GEMINI_API detected:", masked);
 }
 
@@ -43,4 +44,3 @@ export async function callGemini(prompt) {
   const tokens = data?.usageMetadata?.totalTokenCount ?? 0;
   return { text, model: "gemini-1.5-flash-latest", tokens };
 }
-
