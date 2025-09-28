@@ -1,37 +1,45 @@
 // scripts/lib/token-usage.js
 // Centralized token usage logging with fallback to estimation.
+// Produces data/cache/pipeline-usage.json in this shape:
+//
+// {
+//   "runs": [
+//     {
+//       "ts": "...",
+//       "stages": {
+//         "enrich": {
+//           "<model>": { "total": 1234, "details": [ { itemId, input, output, total, ts } ] }
+//         },
+//         "classify": { ... }
+//       }
+//     }
+//   ]
+// }
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const ROOT = path.resolve(process.cwd(), "data/cache");
+const ROOT = path.resolve(process.cwd(), "data", "cache");
 const USAGE_FILE = path.join(ROOT, "pipeline-usage.json");
 
-// --- Util: naive token estimator ---
+// --- Naive estimator (~4 chars per token) ---
 export function estimateTokensFromText(text = "") {
   if (!text) return 0;
-  // Roughly 4 chars per token on average
-  return Math.ceil(text.length / 4);
+  return Math.ceil(String(text).length / 4);
 }
 
 /**
- * Append usage stats for a single item + stage.
- * @param {Object} params
- * @param {"enrich"|"classify"} params.stage
- * @param {string} params.model
- * @param {string} params.itemId
- * @param {number} [params.inputTokens]
- * @param {number} [params.outputTokens]
- * @param {Object} [params.rawUsage] - Optional raw usage object from API
+ * Log usage for a stage with best-available accuracy.
+ * Prefer real API counts (rawUsage) → else estimate from text.
+ *
+ * @param {"enrich"|"classify"} stage
+ * @param {string} model
+ * @param {string} prompt
+ * @param {string} completion
+ * @param {string} itemId
+ * @param {object|null} rawUsage  (optional: {prompt_tokens, completion_tokens, total_tokens})
  */
-export async function logUsage({
-  stage,
-  model,
-  itemId,
-  inputTokens,
-  outputTokens,
-  rawUsage = {}
-}) {
+export async function logStageUsage(stage, model, prompt, completion, itemId, rawUsage = null) {
   await fs.mkdir(ROOT, { recursive: true });
 
   let log;
@@ -47,20 +55,11 @@ export async function logUsage({
   const run = log.runs[log.runs.length - 1];
 
   if (!run.stages[stage]) run.stages[stage] = {};
-  if (!run.stages[stage][model]) {
-    run.stages[stage][model] = { total: 0, details: [] };
-  }
+  if (!run.stages[stage][model]) run.stages[stage][model] = { total: 0, details: [] };
 
-  // Prefer raw API counts, fall back to provided, then estimates
-  const inTok =
-    rawUsage.prompt_tokens ??
-    inputTokens ??
-    estimateTokensFromText("");
-  const outTok =
-    rawUsage.completion_tokens ??
-    outputTokens ??
-    estimateTokensFromText("");
-  const total = rawUsage.total_tokens ?? inTok + outTok;
+  const inTok  = rawUsage?.prompt_tokens ?? estimateTokensFromText(prompt);
+  const outTok = rawUsage?.completion_tokens ?? estimateTokensFromText(completion);
+  const total  = rawUsage?.total_tokens ?? (inTok + outTok);
 
   run.stages[stage][model].total += total;
   run.stages[stage][model].details.push({
