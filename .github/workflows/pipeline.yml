@@ -31,6 +31,17 @@ jobs:
           RAINDROP_REFRESH_TOKEN: ${{ secrets.RAINDROP_REFRESH_TOKEN }}
           ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
 
+      - name: Debug GEMINI_API secret
+        run: |
+          if [ -z "$GEMINI_API" ]; then
+            echo "DEBUG: GEMINI_API is missing or empty"
+          else
+            echo "DEBUG: GEMINI_API is set, length=${#GEMINI_API}"
+            echo "DEBUG: GEMINI_API starts with ${GEMINI_API:0:3}..."
+          fi
+        env:
+          GEMINI_API: ${{ secrets.GEMINI_API }}
+
       - name: Run pipeline
         run: node scripts/run-pipeline.js
         env:
