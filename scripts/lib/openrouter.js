@@ -1,6 +1,6 @@
 // scripts/lib/openrouter.js
 // Stage-specific OpenRouter rotation with real usage passthrough.
-// Returns { text, model, tokens, rawUsage }
+// Returns { text, model, tokens, rawUsage, provider }
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -49,46 +49,16 @@ export async function callWithRotation(prompt, stage = "enrich") {
   for (let i = 0; i < models.length; i++) {
     const model = models[(start + i) % models.length];
     try {
-      const { text, rawUsage } = await callOpenRouter(model, prompt);
+      const { text, rawUsage, provider } = await callOpenRouter(model, prompt);
       const usage = rawUsage ?? {};
       const tokens = {
         prompt: usage.prompt_tokens ?? 0,
         completion: usage.completion_tokens ?? 0,
         total: usage.total_tokens ?? 0,
       };
-      return { text, model, tokens, rawUsage: usage };
+
+      // 🔍 Debug log: which provider actually handled the request
+      console.log(`[openrouter] ${stage} → ${model} (provider: ${provider || "unknown"})`);
+
+      return { text, model, tokens, rawUsage: usage, provider };
     } catch (err) {
-      console.warn(`[openrouter] ${stage} failed with ${model}: ${err.message}`);
-      // try next model
-    }
-  }
-
-  throw new Error(`All OpenRouter models failed for stage "${stage}"`);
-}
-
-async function callOpenRouter(model, prompt) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await safeText(res);
-    throw new Error(`${res.status} ${res.statusText}${body ? ` – ${body.slice(0, 200)}` : ""}`);
-  }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-  return { text, rawUsage: data.usage ?? {} };
-}
-
-async function safeText(res) {
-  try { return await res.text(); } catch { return ""; }
-}
