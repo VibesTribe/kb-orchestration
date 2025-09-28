@@ -1,5 +1,4 @@
 {
-{
   "enrich": [
     "deepseek/deepseek-v3.1",
     "openai/gpt-oss-120b",
