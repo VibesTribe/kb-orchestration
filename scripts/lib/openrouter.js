@@ -62,3 +62,54 @@ export async function callWithRotation(prompt, stage = "enrich") {
 
       return { text, model, tokens, rawUsage: usage, provider };
     } catch (err) {
+      console.warn(`[openrouter] ${stage} failed with ${model}: ${err.message}`);
+      // try next model
+    }
+  }
+
+  throw new Error(`All OpenRouter models failed for stage "${stage}"`);
+}
+
+async function callOpenRouter(model, prompt) {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await safeText(res);
+    throw new Error(`${res.status} ${res.statusText}${body ? ` – ${body.slice(0, 200)}` : ""}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+  // provider is usually in `provider` or `provider_name` in OpenRouter responses
+  const provider =
+    data.provider?.id ||
+    data.provider?.name ||
+    data.provider ||
+    (Array.isArray(data.route) ? data.route[0]?.provider : null) ||
+    null;
+
+  return {
+    text,
+    rawUsage: data.usage ? { ...data.usage, provider } : { provider },
+    provider,
+  };
+}
+
+async function safeText(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
