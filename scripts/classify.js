@@ -1,6 +1,6 @@
 // scripts/classify.js
 // Classification flow using per-item fail-fast and provider rotation.
-// Priority per item: OpenAI (direct) → Gemini (direct) → OpenRouter → DeepSeek (direct).
+// Priority per item: OpenAI (direct) → Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
 // Stores results incrementally to knowledge.json after each project classification.
 // Uses fullSummary (preferred) for richer signal; falls back to summary/description/title.
 
@@ -12,6 +12,7 @@ import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
 import { callOpenAI } from "./lib/openai.js";
 import { callDeepSeek } from "./lib/deepseek.js";
+import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
 
@@ -133,7 +134,7 @@ export async function classify(options = {}) {
 
         const prompt = buildPrompt({ project, item });
 
-        // Priority: OpenAI → Gemini → OpenRouter → DeepSeek
+        // Priority: OpenAI → Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
         let text = "";
         let model = "";
         let rawUsage = null;
@@ -151,12 +152,24 @@ export async function classify(options = {}) {
           } catch (e2) {
             log("Gemini failed; fallback to OpenRouter", { id: item.id, project: project.name, error: e2.message });
             try {
-              const r = await callWithRotation(prompt, "classify");
-              text = r.text; model = r.model; rawUsage = { ...r.rawUsage, provider: r.provider || r.rawUsage?.provider || "openrouter" };
+              const r = await safeCall({
+                provider: "openrouter",
+                model: "rotation",
+                fn: () => callWithRotation(prompt, "classify"),
+                estCost: 1
+              });
+              if (!r) throw new Error("OpenRouter skipped (cap reached)");
+              text = r.text; model = r.model; rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
               log("Used OpenRouter for classify", { id: item.id, project: project.name, model, provider: r.provider });
             } catch (e3) {
-              log("OpenRouter failed; fallback to DeepSeek (direct)", { id: item.id, project: project.name, error: e3.message });
-              const r = await callDeepSeek(prompt);
+              log("OpenRouter failed; fallback to DeepSeek", { id: item.id, project: project.name, error: e3.message });
+              const r = await safeCall({
+                provider: "deepseek",
+                model: "deepseek-chat",
+                fn: () => callDeepSeek(prompt),
+                estCost: 0.01
+              });
+              if (!r) throw new Error("DeepSeek skipped (cap reached)");
               text = r.text; model = r.model; rawUsage = r.rawUsage ?? null;
               log("Used DeepSeek direct for classify", { id: item.id, project: project.name, model });
             }
