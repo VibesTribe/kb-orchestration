@@ -1,26 +1,21 @@
 // scripts/lib/gemini.js
-// Minimal Gemini API helper
-// Returns { text, model, tokens }
+// Minimal Gemini API helper (direct).
+// Returns { text, model, tokens }.
 
 import fetch from "node-fetch";
 
+// Allow either GEMINI_API or GEMINI_API_KEY (you have GEMINI_API in Actions)
 const GEMINI_API = process.env.GEMINI_API || process.env.GEMINI_API_KEY;
-
 if (!GEMINI_API) {
-  console.error("DEBUG: GEMINI_API is missing or empty.");
   throw new Error("GEMINI_API is required");
-} else {
-  // Masked debug: show only first 3 chars and total length
-  const masked =
-    GEMINI_API.length > 3
-      ? GEMINI_API.slice(0, 3) + "..." + ` (len=${GEMINI_API.length})`
-      : `(len=${GEMINI_API.length})`;
-  console.error("DEBUG: GEMINI_API detected:", masked);
 }
+
+// Stable model ID per your spec
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 export async function callGemini(prompt) {
   const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent",
+    `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -42,5 +37,5 @@ export async function callGemini(prompt) {
   const text =
     data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "(no output)";
   const tokens = data?.usageMetadata?.totalTokenCount ?? 0;
-  return { text, model: "gemini-1.5-flash-latest", tokens };
+  return { text, model: GEMINI_MODEL, tokens };
 }
