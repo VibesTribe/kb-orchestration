@@ -83,17 +83,20 @@ export async function syncCuratedRun(curatedDir) {
   }
 }
 
-// digest JSON/TXT/HTML
+// digest JSON/TXT/HTML — preserve folder structure under /digest/...
 export async function syncDigest(digestResult) {
-  if (!digestResult?.files) {
+  const filesObj = digestResult?.files ?? null;
+  if (!filesObj) {
     console.log("ℹ️ No digestResult provided, skipping digest sync");
     return;
   }
-  const remoteDir = "digest";
+
   try {
-    for (const filePath of Object.values(digestResult.files)) {
-      const name = path.basename(filePath);
-      await pushUpdate(filePath, path.join(remoteDir, name), `Update digest/${name}`);
+    for (const filePath of Object.values(filesObj)) {
+      // Mirror the relative path under /data to the remote repo
+      const relFromData = path.relative(DATA, filePath).replace(/\\/g, "/");
+      const remotePath = relFromData; // e.g. "digest/2025-09-29/…/digest.json"
+      await pushUpdate(filePath, remotePath, `Update ${remotePath}`);
     }
   } catch (err) {
     console.error("❌ syncDigest failed:", err.message);
