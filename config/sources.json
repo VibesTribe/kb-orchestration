@@ -9,23 +9,22 @@
       { "id": "PLYbEaHqVPm4u1dw5SiA5NETALRykvP2tn", "mode": "once", "label": "Vibeflow Playlist" }
     ],
     "channels": [
-      { "id": "UCQyLg-8x7kS6WwI_Gk179_Q", "mode": "daily", "label": "indydevdan" },
-      { "id": "UCVqQc38mGqR4Y2n32L719w", "mode": "daily", "label": "ColeMedin" },
-      { "id": "UCe1oXQ47y7_F1bUjF8tD96Q", "mode": "daily", "label": "iamseankochel" },
-      { "id": "UCu21fJd8-jWw-d1q58Fp2_w", "mode": "daily", "label": "GosuCoder" },
-      { "id": "UCgWv9d_0_9d6_5G2y3M8x0w", "mode": "daily", "label": "DavidOndrej" },
-      { "id": "UC-e_bC8i-y14T4yVvS7N25A", "mode": "daily", "label": "vrsen" },
-      { "id": "UCF-F9q3e5W_v2x729QG_Q-g", "mode": "daily", "label": "soloswiftcrafter" },
-      { "id": "UCjG1GfWc9p1o_qYhR3gYv4g", "mode": "daily", "label": "DevelopersDigest" },
-      { "id": "UC2i_j0m7J2hBqCqW0hW-EGA", "mode": "daily", "label": "matthew_berman" },
-      { "id": "UC5V83G27L-u_gqjW5r7vBfw", "mode": "daily", "label": "MervinPraison" },
-      { "id": "UCyK2hX2K9552Lq8U2X-71zQ", "mode": "daily", "label": "theailifestyle" },
-      { "id": "UCyXevW05YUa9wGQgpSPdcUw", "mode": "daily", "label": "AllAboutAI" },
-      { "id": "UCLxK3W6124P9Fv1XvK8kLWA", "mode": "daily", "label": "code4AI" },
-      { "id": "UC6erWloKMgYhU--VvMA5ZJQ", "mode": "daily", "label": "WhatsAI" },
-      { "id": "UCJ-WzO3Yw636Vd8Jp3HwE2Q", "mode": "daily", "label": "AIJasonZ" }
-    ],
-    "defaultWindow": "1d"
+      { "id": "UCQyLg-8x7kS6WwI_Gk179_Q", "mode": "daily", "defaultWindow": 1, "label": "indydevdan" },
+      { "id": "UCVqQc38mGqR4Y2zN32L719w", "mode": "daily", "defaultWindow": 1, "label": "ColeMedin" },
+      { "id": "UCe1oXQ47y7_F1bUjF8tD96Q", "mode": "daily", "defaultWindow": 1, "label": "iamseankochel" },
+      { "id": "UCu21fJd8-jWw-d1q58Fp2_w", "mode": "daily", "defaultWindow": 1, "label": "GosuCoder" },
+      { "id": "UCgWv9d_0_9d6_5G2y3M8x0w", "mode": "daily", "defaultWindow": 1, "label": "DavidOndrej" },
+      { "id": "UC-e_bC8i-y14T4yVvS7N25A", "mode": "daily", "defaultWindow": 1, "label": "vrsen" },
+      { "id": "UCF-F9q3e5W_v2x729QG_Q-g", "mode": "daily", "defaultWindow": 1, "label": "soloswiftcrafter" },
+      { "id": "UCjG1GfWc9p1o_qYhR3gYv4g", "mode": "daily", "defaultWindow": 1, "label": "DevelopersDigest" },
+      { "id": "UC2i_j0m7J2hBqCqW0hW-EGA", "mode": "daily", "defaultWindow": 1, "label": "matthew_berman" },
+      { "id": "UC5V83G27L-u_gqjW5r7vBfw", "mode": "daily", "defaultWindow": 1, "label": "MervinPraison" },
+      { "id": "UCyK2hX2K9552Lq8U2X-71zQ", "mode": "daily", "defaultWindow": 1, "label": "theailifestyle" },
+      { "id": "UCyXevW05YUa9wGQgpSPdcUw", "mode": "daily", "defaultWindow": 1, "label": "AllAboutAI" },
+      { "id": "UCLxK3W6124P9Fv1XvK8kLWA", "mode": "daily", "defaultWindow": 1, "label": "code4AI" },
+      { "id": "UC6erWloKMgYhU--VvMA5ZJQ", "mode": "daily", "defaultWindow": 1, "label": "WhatsAI" },
+      { "id": "UCJ-WzO3Yw636Vd8Jp3HwE2Q", "mode": "daily", "defaultWindow": 1, "label": "AIJasonZ" }
+    ]
   },
   "rss": [
     { "id": "huggingface", "url": "https://huggingface.co/blog/feed.xml", "mode": "pause", "label": "Hugging Face Blog" },
