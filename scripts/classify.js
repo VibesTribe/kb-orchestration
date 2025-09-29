@@ -1,7 +1,8 @@
 // scripts/classify.js
 // Classification flow using per-item fail-fast and provider rotation.
 // Priority per item: OpenAI (direct) → Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
-// Stores results incrementally to knowledge.json after each project classification.
+// Stores results incrementally to knowledge.json after each project classification,
+// and syncs immediately to the knowledgebase repo.
 // Uses fullSummary (preferred) for richer signal; falls back to summary/description/title.
 
 import fs from "node:fs/promises";
@@ -15,6 +16,7 @@ import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
+import { syncKnowledge } from "./lib/kb-sync.js";   // ✅ NEW
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -26,6 +28,11 @@ const PROJECTS_DIR = path.join(ROOT, "projects");
 function log(msg, ctx = {}) {
   const ts = new Date().toISOString();
   console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
+}
+
+// ---------- Throttling helper ----------
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ---------- Helpers ----------
@@ -197,6 +204,9 @@ export async function classify(options = {}) {
 
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
+
+        await syncKnowledge();   // ✅ push immediately
+        await sleep(5000);       // ✅ throttle to ~12/min
 
         classifiedCount++;
         anySuccessForItem = true;
