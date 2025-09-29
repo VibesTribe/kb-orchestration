@@ -16,7 +16,7 @@ import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
-import { syncKnowledge } from "./lib/kb-sync.js";   // ✅ NEW
+import { syncKnowledge } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -34,7 +34,148 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// … [all helper functions unchanged] …
+function extractYouTubeVideoId(item) {
+  try {
+    if (typeof item.id === "string" && item.id.startsWith("youtube:video:")) {
+      return item.id.split(":").pop();
+    }
+    if (!item.url) return null;
+    const u = new URL(item.url);
+    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    if (u.hostname.includes("youtu.be")) {
+      return u.pathname.replace("/", "").trim() || null;
+    }
+  } catch {}
+  return null;
+}
+
+function safeJoinText(arr) {
+  return arr.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function parseTimedTextTracks(xml) {
+  const tracks = [];
+  const trackTagRegex = /<track\s+([^>]+?)\s*\/>/g;
+  const attrRegex = /(\w+)="([^"]*)"/g;
+  let m;
+  while ((m = trackTagRegex.exec(xml)) !== null) {
+    const attrs = {};
+    let a;
+    while ((a = attrRegex.exec(m[1])) !== null) attrs[a[1]] = a[2];
+    if (attrs.lang_code) tracks.push({ lang_code: attrs.lang_code, kind: attrs.kind || "" });
+  }
+  return tracks;
+}
+function pickBestTrack(tracks) {
+  if (!tracks.length) return null;
+  const en = tracks.filter((t) => t.lang_code.toLowerCase().startsWith("en"));
+  return en.find((t) => t.kind !== "asr") || en.find((t) => t.kind === "asr") || tracks[0];
+}
+
+async function fetchTranscriptTimedText(videoId) {
+  const listUrl = `https://www.youtube.com/api/timedtext?type=list&v=${encodeURIComponent(videoId)}`;
+  const listRes = await fetch(listUrl);
+  if (!listRes.ok) return null;
+  const listXml = await listRes.text();
+  const chosen = pickBestTrack(parseTimedTextTracks(listXml));
+  if (!chosen) return null;
+
+  // JSON3 first
+  const jsonUrl = `https://www.youtube.com/api/timedtext?fmt=json3&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
+  const jsonRes = await fetch(jsonUrl);
+  if (jsonRes.ok) {
+    try {
+      const j = await jsonRes.json();
+      const parts = [];
+      for (const ev of j.events || []) {
+        if (Array.isArray(ev.segs)) for (const seg of ev.segs) if (seg?.utf8) parts.push(seg.utf8);
+      }
+      const text = safeJoinText(parts);
+      if (text) return text;
+    } catch {}
+  }
+
+  // Fallback to VTT
+  const vttUrl = `https://www.youtube.com/api/timedtext?fmt=vtt&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
+  const vttRes = await fetch(vttUrl);
+  if (!vttRes.ok) return null;
+  const vtt = await vttRes.text();
+  const lines = vtt
+    .replace(/^WEBVTT.*$/m, "")
+    .split(/\r?\n/)
+    .filter(
+      (ln) =>
+        ln &&
+        !/^\d+$/.test(ln) &&
+        !/^\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}/.test(ln)
+    );
+  return safeJoinText(lines) || null;
+}
+
+function clamp(text, maxChars = 12000) {
+  if (!text || text.length <= maxChars) return text;
+  const head = text.slice(0, Math.floor(maxChars * 0.7));
+  const tail = text.slice(-Math.floor(maxChars * 0.3));
+  return `${head}\n...\n${tail}`;
+}
+
+function buildPromptJSON({ item, transcript }) {
+  const base = [
+    "You are an expert analyst enriching items for a knowledgebase.",
+    "Return STRICT JSON ONLY (no Markdown), matching exactly this schema:",
+`{
+  "full_summary": "250-400 word neutral, specific summary capturing main ideas, methods, results, caveats, with concrete details.",
+  "summary": "2-3 sentence concise blurb for a daily digest (40-80 words).",
+  "enrichment": {
+    "bullet_points": ["3-6 terse, factual bullets"],
+    "keywords": ["5-12 domain terms"],
+    "entities": {
+      "people": [], "orgs": [], "products": [],
+      "tech": [], "standards": []
+    },
+    "topics": ["2-6 broader topics"],
+    "links": []
+  }
+}`,
+    "Rules:",
+    "- No meta text like 'As an AI'.",
+    "- No requests for more info.",
+    "- Cite concrete details from the provided content.",
+    "- Keep it neutral and project-agnostic.",
+    "",
+    `Title: ${item.title ?? "(untitled)"}`,
+    `URL: ${item.url ?? "(no url)"}`
+  ];
+
+  if (transcript) {
+    base.push("", "Content (transcript, possibly truncated):", clamp(transcript));
+  } else if (item.description) {
+    base.push("", "Content (description):", clamp(item.description, 6000));
+  } else {
+    base.push("", "Content: Only title and URL are available. Infer cautiously.");
+  }
+
+  return base.join("\n");
+}
+
+function looksBad(txt = "") {
+  const s = String(txt).toLowerCase();
+  if (s.length < 80) return true;
+  const bad = ["please provide", "i cannot", "insufficient information", "as an ai", "cannot summarize", "need more information"];
+  return bad.some((p) => s.includes(p));
+}
+
+// Strict JSON extractor (grabs first {...} block)
+function parseStrictJSON(txt) {
+  try {
+    const start = txt.indexOf("{");
+    const end = txt.lastIndexOf("}");
+    if (start >= 0 && end >= start) {
+      return JSON.parse(txt.slice(start, end + 1));
+    }
+  } catch {}
+  return null;
+}
 
 // ---------- Main enrichment ----------
 export async function enrich(options = {}) {
@@ -51,21 +192,67 @@ export async function enrich(options = {}) {
     let fullyFailed = false;
 
     try {
-      // … [transcript + prompt building unchanged] …
+      const videoId = extractYouTubeVideoId(item);
+      let transcript = null;
+      if (videoId) {
+        try {
+          transcript = await fetchTranscriptTimedText(videoId);
+          if (transcript) item.transcript = clamp(transcript);
+        } catch (e) {
+          log("Transcript fetch failed", { id: item.id, error: e.message });
+        }
+      }
 
-      // Priority chain: Gemini → OpenAI → OpenRouter → DeepSeek
+      const prompt = buildPromptJSON({ item, transcript });
+
+      // Priority chain: Gemini → OpenAI → OpenRouter (guardrailed) → DeepSeek (guardrailed)
       let text = "";
       let model = "";
       let rawUsage = null;
 
       try {
-        const r = await callGemini(prompt);
+        const r = await callGemini(prompt); // gemini-2.5-flash-lite (per your lib)
         text = r.text;
         model = r.model;
         rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
         log("Used Gemini for enrichment", { id: item.id, model });
       } catch (e1) {
-        // … [fallbacks unchanged] …
+        log("Gemini failed; fallback to OpenAI", { id: item.id, error: e1.message });
+        try {
+          const r = await callOpenAI(prompt);
+          text = r.text;
+          model = r.model;
+          rawUsage = r.rawUsage ?? null;
+          log("Used OpenAI for enrichment", { id: item.id, model });
+        } catch (e2) {
+          log("OpenAI failed; fallback to OpenRouter", { id: item.id, error: e2.message });
+          try {
+            const r = await safeCall({
+              provider: "openrouter",
+              model: "rotation",
+              fn: () => callWithRotation(prompt, "enrich"),
+              estCost: 1
+            });
+            if (!r) throw new Error("OpenRouter skipped (cap reached)");
+            text = r.text;
+            model = r.model;
+            rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
+            log("Used OpenRouter for enrichment", { id: item.id, model, provider: r.provider });
+          } catch (e3) {
+            log("OpenRouter failed; fallback to DeepSeek", { id: item.id, error: e3.message });
+            const r = await safeCall({
+              provider: "deepseek",
+              model: "deepseek-chat",
+              fn: () => callDeepSeek(prompt),
+              estCost: 0.01
+            });
+            if (!r) throw new Error("DeepSeek skipped (cap reached)");
+            text = r.text;
+            model = r.model;
+            rawUsage = r.rawUsage ?? null;
+            log("Used DeepSeek direct for enrichment", { id: item.id, model });
+          }
+        }
       }
 
       const parsed = parseStrictJSON(text);
@@ -108,7 +295,8 @@ export async function enrich(options = {}) {
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
 
-        await syncKnowledge();   // ✅ NEW → push immediately
+        // Push immediately to knowledgebase repo
+        await syncKnowledge();
 
         await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
 
@@ -116,7 +304,8 @@ export async function enrich(options = {}) {
         consecutiveFails = 0;
         log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
 
-        await sleep(5000);   // ✅ NEW → throttle (~12/min)
+        // Throttle to respect provider RPM limits (~12/min)
+        await sleep(5000);
       }
     } catch (err) {
       fullyFailed = true;
