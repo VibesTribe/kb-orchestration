@@ -10,6 +10,7 @@ import {
   loadJson,
   listDirectories
 } from "./lib/utils.js";
+import { syncDigest } from "./lib/kb-sync.js"; // ✅ NEW
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -27,6 +28,11 @@ function log(message, context = {}) {
   const timestamp = new Date().toISOString();
   const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
   console.log(`[${timestamp}] ${message}${payload}`);
+}
+
+// Tiny throttle to avoid rapid-fire GitHub commits
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
@@ -108,7 +114,11 @@ export async function digest() {
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
     await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
 
-    log("Checkpoint saved", { project: project.name });
+    // ✅ Push artifacts upstream after each project so partial digests aren't lost
+    await syncDigest({ files: { json: jsonPath, txt: textPath, html: htmlPath } });
+    await sleep(1000);
+
+    log("Checkpoint saved + synced", { project: project.name });
   }
 
   // Attach token usage for footer (safe if file missing)
@@ -120,10 +130,15 @@ export async function digest() {
       .reduce((sum, m) => sum + (m?.total || 0), 0);
 
     digestPayload.tokenUsage = { ...latestRun.stages, totalTokens };
+
     // Re-save artifacts so the footer appears in the final files
     await saveJsonCheckpoint(jsonPath, digestPayload);
     await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
     await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
+
+    // ✅ Push the final version (with footer) as well
+    await syncDigest({ files: { json: jsonPath, txt: textPath, html: htmlPath } });
+    await sleep(1000);
   }
 
   log("Digest artifacts prepared", {
@@ -161,7 +176,7 @@ export async function digest() {
 function collectItemsForProject(curated, project) {
   const high = [];
   const moderate = [];
-  for (const item of curated.items ?? []) {
+  for (const item of (curated.items ?? [])) {
     const assignment = (item.projects ?? []).find(
       (entry) => entry.projectKey === project.key || entry.project === project.name
     );
@@ -269,7 +284,6 @@ function formatTextEntry(entry) {
 // --- HTML RENDERING ---
 function renderHtmlDigest(payload) {
   // A clean, self-contained HTML with a token-usage footer.
-  // If you already have a preferred template, you can replace just this function's body.
 
   const esc = (s) =>
     String(s ?? "")
