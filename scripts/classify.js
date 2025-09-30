@@ -16,7 +16,7 @@ import { callGemini } from "./lib/gemini.js";
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
-import { logStageUsage } from "./lib/token-usage.js";
+import { logStageUsage, estimateTokensFromText } from "./lib/token-usage.js";
 import { syncKnowledge } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -183,11 +183,13 @@ export async function classify(options = {}) {
         // Priority: Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
         let text = "";
         let model = "";
+        let provider = "";
         let rawUsage = null;
 
         try {
           const r = await callGemini(prompt);
-          text = r.text; model = r.model; rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
+          text = r.text; model = r.model; provider = "gemini";
+          rawUsage = { total_tokens: r.tokens ?? 0, provider };
           log("Used Gemini for classify", { id: item.id, project: project.name, model });
         } catch (e2) {
           log("Gemini failed; fallback to OpenRouter", { id: item.id, project: project.name, error: e2.message });
@@ -199,8 +201,9 @@ export async function classify(options = {}) {
               estCost: 1
             });
             if (!r) throw new Error("OpenRouter skipped (cap reached)");
-            text = r.text; model = r.model; rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
-            log("Used OpenRouter for classify", { id: item.id, project: project.name, model, provider: r.provider });
+            text = r.text; model = r.model; provider = r.provider || "openrouter";
+            rawUsage = { ...r.rawUsage, provider };
+            log("Used OpenRouter for classify", { id: item.id, project: project.name, model, provider });
           } catch (e3) {
             log("OpenRouter failed; fallback to DeepSeek", { id: item.id, project: project.name, error: e3.message });
             const r = await safeCall({
@@ -210,7 +213,8 @@ export async function classify(options = {}) {
               estCost: 0.01
             });
             if (!r) throw new Error("DeepSeek skipped (cap reached)");
-            text = r.text; model = r.model; rawUsage = r.rawUsage ?? null;
+            text = r.text; model = r.model; provider = "deepseek";
+            rawUsage = r.rawUsage ? { ...r.rawUsage, provider } : { provider };
             log("Used DeepSeek direct for classify", { id: item.id, project: project.name, model });
           }
         }
@@ -230,7 +234,23 @@ export async function classify(options = {}) {
           modelUsed: model
         });
 
-        await logStageUsage("classify", model, prompt, text, item.id, rawUsage);
+        // --- NEW: per-item, per-project token usage in knowledge.json
+        const inputTokens = rawUsage?.prompt_tokens ?? estimateTokensFromText(prompt);
+        const outputTokens = rawUsage?.completion_tokens ?? estimateTokensFromText(text);
+        const totalTokens = rawUsage?.total_tokens ?? (inputTokens + outputTokens);
+
+        item.usage = item.usage || {};
+        item.usage.classify = item.usage.classify || {};
+        item.usage.classify[project.key] = {
+          model,
+          provider,
+          inputTokens,
+          outputTokens,
+          totalTokens,
+          ts: new Date().toISOString()
+        };
+
+        await logStageUsage("classify", model, prompt, text, item.id, { ...rawUsage, provider });
 
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
@@ -240,7 +260,13 @@ export async function classify(options = {}) {
 
         classifiedCount++;
         anySuccessForItem = true;
-        log("Classified item", { id: item.id, project: project.name, model });
+        log("Classified item", {
+          id: item.id,
+          project: project.name,
+          model,
+          provider,
+          tokens: totalTokens
+        });
       }
 
       // If the item now has classifications for all active projects, lock it into state
