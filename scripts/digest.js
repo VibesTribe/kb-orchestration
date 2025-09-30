@@ -363,9 +363,6 @@ export async function digest() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  digest().
-
-if (import.meta.url === `file://${process.argv[1]}`) {
   digest().catch((err) => {
     console.error("Digest step failed", err);
     process.exitCode = 1;
