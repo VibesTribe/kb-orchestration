@@ -4,6 +4,12 @@
 // YouTube: transcript → rich JSON (fullSummary + summary + enrichment).
 // Saves incrementally after each item. Fail-fast after N consecutive full failures.
 // Idempotent: if knowledge.json already has good enrichment, skip even if cache is empty.
+// Transcript handling:
+//   - Cache transcripts under data/transcripts/<videoId>.txt
+//   - If file has text → reuse (no re-fetch)
+//   - If file is empty → treat as "no transcript available" marker; do not re-fetch
+//   - Only include transcript in prompt if it has non-empty text
+//   - Push transcript files to KB repo via pushUpdate()
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,14 +21,15 @@ import { callGemini } from "./lib/gemini.js";
 // import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
-import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
+import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
-import { syncKnowledge } from "./lib/kb-sync.js";
+import { syncKnowledge, pushUpdate } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const KNOWLEDGE_FILE = path.join(ROOT, "data", "knowledge.json");
 const STATE_FILE = path.join(ROOT, "data/cache/enrich-state.json");
+const TRANSCRIPTS_DIR = path.join(ROOT, "data", "transcripts");
 
 // ---------- Logging ----------
 function log(msg, ctx = {}) {
@@ -148,7 +155,7 @@ function buildPromptJSON({ item, transcript }) {
     `URL: ${item.url ?? "(no url)"}`
   ];
 
-  if (transcript) {
+  if (transcript && transcript.trim().length > 0) {
     base.push("", "Content (transcript, possibly truncated):", clamp(transcript));
   } else if (item.description) {
     base.push("", "Content (description):", clamp(item.description, 6000));
@@ -166,16 +173,41 @@ function looksBad(txt = "") {
   return bad.some((p) => s.includes(p));
 }
 
-// Strict JSON extractor (grabs first {...} block)
-function parseStrictJSON(txt) {
+function transcriptFilePath(videoId) {
+  return path.join(TRANSCRIPTS_DIR, `${videoId}.txt`);
+}
+
+async function readCachedTranscript(videoId) {
   try {
-    const start = txt.indexOf("{");
-    const end = txt.lastIndexOf("}");
-    if (start >= 0 && end >= start) {
-      return JSON.parse(txt.slice(start, end + 1));
+    await ensureDir(TRANSCRIPTS_DIR);
+    const p = transcriptFilePath(videoId);
+    const st = await fs.stat(p);
+    if (st.size === 0) {
+      // empty marker → no transcript available (do not re-fetch)
+      return { path: p, text: null, exists: true, emptyMarker: true };
     }
-  } catch {}
-  return null;
+    const raw = await fs.readFile(p, "utf8");
+    const text = raw.trim();
+    if (text.length > 0) {
+      return { path: p, text, exists: true, emptyMarker: false };
+    }
+    // empty/whitespace → treat as marker
+    return { path: p, text: null, exists: true, emptyMarker: true };
+  } catch {
+    return { path: transcriptFilePath(videoId), text: null, exists: false, emptyMarker: false };
+  }
+}
+
+async function writeTranscriptFile(p, text) {
+  await ensureDir(path.dirname(p));
+  const payload = (text && text.trim().length > 0) ? text : "";
+  await fs.writeFile(p, payload, "utf8");
+  const repoRel = path.posix.join("transcripts", path.basename(p));
+  try {
+    await pushUpdate(p, repoRel, payload ? "Add transcript" : "Mark no transcript");
+  } catch (e) {
+    console.warn("⚠️ pushUpdate transcript failed", { file: p, error: e?.message });
+  }
 }
 
 // ---------- Main enrichment ----------
@@ -206,14 +238,39 @@ export async function enrich(options = {}) {
     let fullyFailed = false;
 
     try {
+      // Resolve (and cache) transcript if this is a YouTube video
       const videoId = extractYouTubeVideoId(item);
       let transcript = null;
+
       if (videoId) {
         try {
-          transcript = await fetchTranscriptTimedText(videoId);
-          if (transcript) item.transcript = clamp(transcript);
+          const cached = await readCachedTranscript(videoId);
+          if (cached.exists) {
+            if (cached.emptyMarker) {
+              log("Transcript marker found (none available)", { id: item.id, videoId });
+              transcript = null;
+            } else {
+              log("Using cached transcript", { id: item.id, videoId });
+              transcript = cached.text;
+            }
+          } else {
+            // Not cached → attempt fetch once
+            const fetched = await fetchTranscriptTimedText(videoId);
+            if (fetched && fetched.trim().length > 0) {
+              transcript = fetched;
+              await writeTranscriptFile(cached.path, fetched);
+              log("Fetched and cached transcript", { id: item.id, videoId });
+            } else {
+              // Create empty marker to avoid re-fetch next runs
+              await writeTranscriptFile(cached.path, "");
+              transcript = null;
+              log("No transcript available; wrote empty marker", { id: item.id, videoId });
+            }
+          }
         } catch (e) {
-          log("Transcript fetch failed", { id: item.id, error: e.message });
+          // Do not fail enrichment if transcript retrieval fails; just proceed without transcript
+          log("Transcript step failed; proceeding without transcript", { id: item.id, error: e.message });
+          transcript = null;
         }
       }
 
@@ -278,6 +335,7 @@ export async function enrich(options = {}) {
         log("Invalid enrichment output (fullSummary)", { id: item.id, model });
         fullyFailed = true;
       } else {
+        // Persist enrichment back onto item
         item.fullSummary = fullSummary;
         if (shortSummary && !looksBad(shortSummary)) {
           item.summary = shortSummary;
@@ -294,20 +352,23 @@ export async function enrich(options = {}) {
           },
           topics: parsed?.enrichment?.topics ?? [],
           links: parsed?.enrichment?.links ?? [],
-          transcript_used: Boolean(transcript),
+          transcript_used: Boolean(transcript && transcript.trim().length > 0),
           model_used: model
         };
+
+        // NOTE: we intentionally do NOT store transcript text in knowledge.json to keep it slim.
+        // The transcript (if any) is persisted as a file under data/transcripts and pushed to KB.
 
         state.processed.push(item.id);
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);  // never truncates; updates existing
         await saveJsonCheckpoint(STATE_FILE, state);
 
-        await syncKnowledge(); // push immediately
+        await syncKnowledge(); // push knowledge.json & state changes
         await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
 
         processedCount++;
         consecutiveFails = 0;
-        log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
+        log("Enriched item", { id: item.id, model, yt: Boolean(videoId), transcript_used: Boolean(transcript && transcript.trim().length > 0) });
 
         await sleep(5000); // throttle
       }
@@ -323,7 +384,7 @@ export async function enrich(options = {}) {
           `Fail-fast: ${consecutiveFails} consecutive items failed to enrich across all providers`
         );
       }
-      // No truncation here; just persist current files as-is
+      // Persist current files as-is (no truncation)
       await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
       await saveJsonCheckpoint(STATE_FILE, state);
     }
@@ -333,6 +394,18 @@ export async function enrich(options = {}) {
     total: knowledge.items.length,
     processed: processedCount
   });
+}
+
+// Strict JSON extractor (grabs first {...} block)
+function parseStrictJSON(txt) {
+  try {
+    const start = txt.indexOf("{");
+    const end = txt.lastIndexOf("}");
+    if (start >= 0 && end >= start) {
+      return JSON.parse(txt.slice(start, end + 1));
+    }
+  } catch {}
+  return null;
 }
 
 // ---------- Entrypoint ----------
