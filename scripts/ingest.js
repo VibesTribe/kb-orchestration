@@ -17,7 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fetch from "node-fetch";
 import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
-import { pushUpdate } from "./lib/kb-sync.js";
+import { pushUpdate, pullKnowledge } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -433,6 +433,14 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
 
 export async function ingest() {
   log("Starting ingest...");
+
+  // 🔒 Pull canonical knowledge.json first to avoid accidental shrink
+  try {
+    await pullKnowledge();
+  } catch (e) {
+    log("pullKnowledge failed; continuing with local knowledge.json", { error: e.message });
+  }
+
   const sources = await loadSourcesConfig();
   const state = await loadState();
   const knowledge = await loadKnowledge();
