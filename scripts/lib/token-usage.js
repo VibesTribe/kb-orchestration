@@ -10,7 +10,7 @@
 //         "enrich": {
 //           "<model>": {
 //             "total": 1234,
-//             "provider": "openinference",   // optional
+//             "provider": "openrouter",   // optional
 //             "details": [ { itemId, input, output, total, ts } ]
 //           }
 //         },
@@ -30,6 +30,19 @@ const USAGE_FILE = path.join(ROOT, "pipeline-usage.json");
 export function estimateTokensFromText(text = "") {
   if (!text) return 0;
   return Math.ceil(String(text).length / 4);
+}
+
+// Start a new usage "run" entry (call once per pipeline execution)
+export async function startUsageRun() {
+  await fs.mkdir(ROOT, { recursive: true });
+  let log;
+  try {
+    log = JSON.parse(await fs.readFile(USAGE_FILE, "utf8"));
+  } catch {
+    log = { runs: [] };
+  }
+  log.runs.push({ ts: new Date().toISOString(), stages: {} });
+  await fs.writeFile(USAGE_FILE, JSON.stringify(log, null, 2), "utf8");
 }
 
 /**
@@ -60,8 +73,9 @@ export async function logStageUsage(
     log = { runs: [] };
   }
 
-  if (!log.runs.length) {
-    log.runs.push({ ts: new Date().toISOString(), stages: {} });
+  // Ensure there's an active run (pipeline should call startUsageRun(), but guard here too)
+  if (!Array.isArray(log.runs) || log.runs.length === 0) {
+    log.runs = [{ ts: new Date().toISOString(), stages: {} }];
   }
   const run = log.runs[log.runs.length - 1];
 
