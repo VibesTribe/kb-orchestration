@@ -1,6 +1,6 @@
 // scripts/classify.js
 // Classification flow using per-item fail-fast and provider rotation.
-// Priority per item: OpenAI (direct) → Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
+// Provider priority per item: Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
 // Stores results incrementally to knowledge.json after each project classification,
 // and syncs immediately to the knowledgebase repo.
 // Uses fullSummary (preferred) for richer signal; falls back to summary/description/title.
@@ -11,12 +11,12 @@ import { fileURLToPath } from "node:url";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
-import { callOpenAI } from "./lib/openai.js";
+// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled per request
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
-import { syncKnowledge } from "./lib/kb-sync.js";   // ✅ NEW
+import { syncKnowledge } from "./lib/kb-sync.js";   // ✅ push immediately
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -111,6 +111,17 @@ function validClassificationText(t = "") {
   return /(HIGH|MODERATE|LOW)/i.test(t);
 }
 
+// Strong guard: is this item already classified for every active project?
+function isFullyClassifiedForActiveProjects(item, activeProjects) {
+  if (!Array.isArray(activeProjects) || !activeProjects.length) return true;
+  const remaining = new Set(activeProjects.map((p) => p.key));
+  for (const a of (item.projects || [])) {
+    const key = a.projectKey || null;
+    if (key && remaining.has(key) && a.usefulness) remaining.delete(key);
+  }
+  return remaining.size === 0;
+}
+
 // ---------- Main classification ----------
 export async function classify(options = {}) {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
@@ -126,7 +137,14 @@ export async function classify(options = {}) {
   );
 
   for (const item of knowledge.items) {
-    if (state.processed.includes(item.id)) continue;
+    // Idempotent skip: if state says processed OR the item already has classifications for all active projects
+    if (state.processed.includes(item.id) || isFullyClassifiedForActiveProjects(item, activeProjects)) {
+      if (!state.processed.includes(item.id)) {
+        state.processed.push(item.id);
+        await saveJsonCheckpoint(STATE_FILE, state);
+      }
+      continue;
+    }
 
     let anySuccessForItem = false;
 
@@ -134,52 +152,46 @@ export async function classify(options = {}) {
       item.projects = Array.isArray(item.projects) ? item.projects : [];
 
       for (const project of activeProjects) {
+        // Per-project skip if already classified for this project
         const already = item.projects.find(
           (x) => x.projectKey === project.key || x.project === project.name
         );
-        if (already) continue;
+        if (already && already.usefulness) continue;
 
         const prompt = buildPrompt({ project, item });
 
-        // Priority: OpenAI → Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
+        // Priority: Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
         let text = "";
         let model = "";
         let rawUsage = null;
 
         try {
-          const r = await callOpenAI(prompt);
-          text = r.text; model = r.model; rawUsage = r.rawUsage ?? null;
-          log("Used OpenAI for classify", { id: item.id, project: project.name, model });
-        } catch (e1) {
-          log("OpenAI failed; fallback to Gemini", { id: item.id, project: project.name, error: e1.message });
+          const r = await callGemini(prompt);
+          text = r.text; model = r.model; rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
+          log("Used Gemini for classify", { id: item.id, project: project.name, model });
+        } catch (e2) {
+          log("Gemini failed; fallback to OpenRouter", { id: item.id, project: project.name, error: e2.message });
           try {
-            const r = await callGemini(prompt);
-            text = r.text; model = r.model; rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
-            log("Used Gemini for classify", { id: item.id, project: project.name, model });
-          } catch (e2) {
-            log("Gemini failed; fallback to OpenRouter", { id: item.id, project: project.name, error: e2.message });
-            try {
-              const r = await safeCall({
-                provider: "openrouter",
-                model: "rotation",
-                fn: () => callWithRotation(prompt, "classify"),
-                estCost: 1
-              });
-              if (!r) throw new Error("OpenRouter skipped (cap reached)");
-              text = r.text; model = r.model; rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
-              log("Used OpenRouter for classify", { id: item.id, project: project.name, model, provider: r.provider });
-            } catch (e3) {
-              log("OpenRouter failed; fallback to DeepSeek", { id: item.id, project: project.name, error: e3.message });
-              const r = await safeCall({
-                provider: "deepseek",
-                model: "deepseek-chat",
-                fn: () => callDeepSeek(prompt),
-                estCost: 0.01
-              });
-              if (!r) throw new Error("DeepSeek skipped (cap reached)");
-              text = r.text; model = r.model; rawUsage = r.rawUsage ?? null;
-              log("Used DeepSeek direct for classify", { id: item.id, project: project.name, model });
-            }
+            const r = await safeCall({
+              provider: "openrouter",
+              model: "rotation",
+              fn: () => callWithRotation(prompt, "classify"),
+              estCost: 1
+            });
+            if (!r) throw new Error("OpenRouter skipped (cap reached)");
+            text = r.text; model = r.model; rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
+            log("Used OpenRouter for classify", { id: item.id, project: project.name, model, provider: r.provider });
+          } catch (e3) {
+            log("OpenRouter failed; fallback to DeepSeek", { id: item.id, project: project.name, error: e3.message });
+            const r = await safeCall({
+              provider: "deepseek",
+              model: "deepseek-chat",
+              fn: () => callDeepSeek(prompt),
+              estCost: 0.01
+            });
+            if (!r) throw new Error("DeepSeek skipped (cap reached)");
+            text = r.text; model = r.model; rawUsage = r.rawUsage ?? null;
+            log("Used DeepSeek direct for classify", { id: item.id, project: project.name, model });
           }
         }
 
@@ -213,8 +225,13 @@ export async function classify(options = {}) {
         log("Classified item", { id: item.id, project: project.name, model });
       }
 
-      state.processed.push(item.id);
-      await saveJsonCheckpoint(STATE_FILE, state);
+      // If the item now has classifications for all active projects, lock it into state
+      if (isFullyClassifiedForActiveProjects(item, activeProjects)) {
+        if (!state.processed.includes(item.id)) {
+          state.processed.push(item.id);
+          await saveJsonCheckpoint(STATE_FILE, state);
+        }
+      }
     } catch (err) {
       log("Failed to classify item", { id: item.id, error: err.message });
     }
@@ -244,3 +261,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+
