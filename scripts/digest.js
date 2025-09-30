@@ -1,4 +1,3 @@
-// scripts/digest.js
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -64,36 +63,34 @@ function buildUsefulEntries(knowledge) {
   return out;
 }
 
-// ---- Aggregate token usage from knowledge.json
+// ---- Aggregate token usage from knowledge.json (combined totals per model)
 function aggregateUsage(knowledge) {
-  const usage = { enrich: {}, classify: {} };
+  const totals = {};
   for (const it of knowledge.items || []) {
     if (it.usage?.enrich) {
       const u = it.usage.enrich;
       const key = `${u.provider}:${u.model}`;
-      usage.enrich[key] = usage.enrich[key] || { total: 0, count: 0 };
-      usage.enrich[key].total += u.totalTokens || 0;
-      usage.enrich[key].count += 1;
+      totals[key] = totals[key] || { total: 0, count: 0 };
+      totals[key].total += u.totalTokens || 0;
+      totals[key].count += 1;
     }
     if (it.usage?.classify) {
       for (const [, u] of Object.entries(it.usage.classify)) {
         const key = `${u.provider}:${u.model}`;
-        usage.classify[key] = usage.classify[key] || { total: 0, count: 0 };
-        usage.classify[key].total += u.totalTokens || 0;
-        usage.classify[key].count += 1;
+        totals[key] = totals[key] || { total: 0, count: 0 };
+        totals[key].total += u.totalTokens || 0;
+        totals[key].count += 1;
       }
     }
   }
-  return usage;
+  return totals;
 }
 
 // ---- Renderers (HTML/Text/JSON)
 function renderUsageHtml(usage) {
   const rows = [];
-  for (const [, models] of Object.entries(usage)) {
-    for (const [model, stats] of Object.entries(models)) {
-      rows.push(`<li>${model} — ${stats.total} tokens</li>`);
-    }
+  for (const [model, stats] of Object.entries(usage)) {
+    rows.push(`<li>${model} — ${stats.total} tokens</li>`);
   }
   if (!rows.length) return "";
   return `
@@ -105,10 +102,8 @@ function renderUsageHtml(usage) {
 
 function renderUsageText(usage) {
   const lines = [];
-  for (const [stage, models] of Object.entries(usage)) {
-    for (const [model, stats] of Object.entries(models)) {
-      lines.push(`${stage} | ${model}: ${stats.total} tokens (${stats.count} items)`);
-    }
+  for (const [model, stats] of Object.entries(usage)) {
+    lines.push(`${model}: ${stats.total} tokens (${stats.count} items)`);
   }
   return lines.length ? `\n\nToken Usage:\n${lines.join("\n")}` : "";
 }
@@ -148,13 +143,19 @@ function renderHtml(date, items, usage, changelog = []) {
       </div>`;
   }).join("\n");
 
-  const changelogSection = changelog.length ? `
+  const changelogSection = changelog.length
+    ? `
     <div class="changelog">
       <h3>Recent Changelog Notes</h3>
       <ul>
         ${changelog.map(c => `<li>${escapeHtml(c)}</li>`).join("\n")}
       </ul>
-    </div>` : "";
+    </div>`
+    : `
+    <div class="changelog">
+      <h3>Recent Changelog Notes</h3>
+      <p>No recent changelog notes available.</p>
+    </div>`;
 
   return `<!DOCTYPE html>
 <html>
@@ -228,7 +229,7 @@ function renderText(date, items, usage, changelog = []) {
 
   const changelogText = changelog.length
     ? `\n\nRecent Changelog Notes:\n${changelog.map(c => `- ${c}`).join("\n")}`
-    : "";
+    : `\n\nRecent Changelog Notes:\n- No recent changelog notes available.`;
 
   return `${body}${usageText}${changelogText}`;
 }
