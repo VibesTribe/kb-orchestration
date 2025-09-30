@@ -3,6 +3,7 @@
 // Provider priority per item: Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
 // YouTube: transcript → rich JSON (fullSummary + summary + enrichment).
 // Saves incrementally after each item. Fail-fast after N consecutive full failures.
+// Idempotent: if knowledge.json already has good enrichment, skip even if cache is empty.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +12,7 @@ import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
-// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled per request
+// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
@@ -187,14 +188,14 @@ export async function enrich(options = {}) {
   let processedCount = 0;
 
   for (const item of knowledge.items) {
-    // Strong idempotent skip: if we already have good enrichment, mark processed and continue
+    // Knowledge-first idempotent skip
     const alreadyEnriched =
       item?.fullSummary &&
       item?.summary &&
       item?.enrichment &&
       !looksBad(item.fullSummary);
 
-    if (state.processed.includes(item.id) || alreadyEnriched) {
+    if (alreadyEnriched || state.processed.includes(item.id)) {
       if (!state.processed.includes(item.id)) {
         state.processed.push(item.id);
         await saveJsonCheckpoint(STATE_FILE, state);
@@ -224,7 +225,7 @@ export async function enrich(options = {}) {
       let rawUsage = null;
 
       try {
-        const r = await callGemini(prompt); // gemini-2.5-flash-lite (per your lib)
+        const r = await callGemini(prompt);
         text = r.text;
         model = r.model;
         rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
@@ -298,20 +299,17 @@ export async function enrich(options = {}) {
         };
 
         state.processed.push(item.id);
-        await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+        await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);  // never truncates; updates existing
         await saveJsonCheckpoint(STATE_FILE, state);
 
-        // Push immediately to knowledgebase repo
-        await syncKnowledge();
-
+        await syncKnowledge(); // push immediately
         await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
 
         processedCount++;
         consecutiveFails = 0;
         log("Enriched item", { id: item.id, model, yt: Boolean(videoId) });
 
-        // Throttle to respect provider RPM limits (~12/min)
-        await sleep(5000);
+        await sleep(5000); // throttle
       }
     } catch (err) {
       fullyFailed = true;
@@ -325,9 +323,9 @@ export async function enrich(options = {}) {
           `Fail-fast: ${consecutiveFails} consecutive items failed to enrich across all providers`
         );
       }
-      const knowledgeReload = await loadJson(KNOWLEDGE_FILE, { items: [] });
-      await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledgeReload);
-      await saveJsonCheckpoint(STATE_FILE, await loadJson(STATE_FILE, { processed: [] }));
+      // No truncation here; just persist current files as-is
+      await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+      await saveJsonCheckpoint(STATE_FILE, state);
     }
   }
 
