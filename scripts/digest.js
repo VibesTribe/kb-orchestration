@@ -1,220 +1,445 @@
 // scripts/digest.js
-// Builds daily digest artifacts (HTML, JSON, TXT) from knowledge.json.
-// Outputs into data/digest/{date}/{timestamp}/ + data/digest/{date}/ + data/digest/latest/
-// Idempotent: will output "Stay Calm and Build On" if no HIGH/MODERATE items.
-
+import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
+import {
+  saveJsonCheckpoint,
+  saveTextCheckpoint,
+  ensureDir,
+  loadJson,
+  listDirectories
+} from "./lib/utils.js";
+import { syncDigest } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
-const DATA = path.join(ROOT, "data");
-const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
-const DIGEST_DIR = path.join(DATA, "digest");
+const ROOT_DIR = path.resolve(__dirname, "..");
+const CURATED_ROOT = path.join(ROOT_DIR, "data", "curated");
+const DIGEST_ROOT = path.join(ROOT_DIR, "data", "digest");
+const PROJECTS_ROOT = path.join(ROOT_DIR, "projects");
+const USAGE_FILE = path.join(ROOT_DIR, "data", "cache", "pipeline-usage.json");
 
-function log(msg, ctx = {}) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
+const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
+const BREVO_FROM_NAME = process.env.BREVO_FROM_NAME ?? "Knowledgebase";
+const BREVO_TO = process.env.BREVO_TO ?? "";
+
+function log(message, context = {}) {
+  const timestamp = new Date().toISOString();
+  const payload = Object.keys(context).length ? ` ${JSON.stringify(context)}` : "";
+  console.log(`[${timestamp}] ${message}${payload}`);
 }
 
-function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-function safeFilenameDate() {
-  return new Date().toISOString().replace(/[:.]/g, "-");
+function tokensToK(total) {
+  if (!total || typeof total !== "number" || !isFinite(total)) return "0k";
+  return `${Math.round(total / 100) / 10}k`;
 }
 
-// ---------- Rendering ----------
-function renderHtml(date, items) {
-  if (!items.length) {
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <title>Daily Digest – ${date}</title>
-  <style>
-    body { font-family: Arial, sans-serif; background-color: #f6f6f6; margin: 0; padding: 0; }
-    .container { width: 100%; max-width: 700px; margin: 20px auto; background-color: #ffffff;
-      border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-    .header { padding: 20px; text-align: center; }
-    .header h1 { margin: 0; font-size: 22px; font-weight: normal; color: #222; }
-    .date { font-size: 14px; margin-top: 4px; color: #666; }
-    .message { padding: 20px; font-size: 14px; color: #333; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Daily Digest</h1>
-      <div class="date">${date}</div>
-    </div>
-    <div class="message">
-      <p>There are no highly or moderately useful items today.</p>
-      <p><strong>Stay Calm and Build On.</strong></p>
-    </div>
-  </div>
-</body>
-</html>`;
+function modelTotalsFromTokenUsage(tokenUsage) {
+  const map = new Map();
+  for (const [stage, models] of Object.entries(tokenUsage || {})) {
+    if (stage === "totalTokens") continue;
+    for (const [model, stats] of Object.entries(models || {})) {
+      const prev = map.get(model) || 0;
+      map.set(model, prev + (stats?.total || 0));
+    }
   }
-
-  const cards = items.map((it) => {
-    const proj = (it.projects || [])[0] || {};
-    const usefulness = proj.usefulness || "LOW";
-    const isHigh = usefulness === "HIGH";
-    const cardClass = isHigh ? "high" : "moderate";
-    const whyColor = isHigh ? "#1b6f5a" : "#553c9a";
-
-    return `
-      <div class="digest-card ${cardClass}">
-        <h3>${isHigh ? "Highly Useful" : "Moderately Useful"}</h3>
-        <p class="title">${it.title || "(untitled)"}</p>
-        ${it.summary ? `<p class="text">${it.summary}</p>` : ""}
-        <p class="meta"><em style="color:${whyColor}">Why it matters:</em><span style="color:${whyColor}"> ${proj.reason || ""}</span></p>
-        ${proj.nextSteps ? `<p class="meta"><em style="color:${whyColor}">Next steps:</em><span style="color:${whyColor}"> ${proj.nextSteps}</span></p>` : ""}
-        <p class="published">Published: ${it.publishedAt || it.createdAt || date}</p>
-        ${it.url ? `<a href="${it.url}">Go to source</a>` : ""}
-      </div>`;
-  }).join("\n");
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <title>Daily Digest – ${date}</title>
-  <style>
-    body { font-family: Arial, sans-serif; background-color: #f6f6f6; margin: 0; padding: 0; }
-    .container { width: 100%; max-width: 700px; margin: 20px auto; background-color: #ffffff;
-      border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-    .header { padding: 20px; text-align: center; }
-    .header h1 { margin: 0; font-size: 22px; font-weight: normal; color: #222; }
-    .date { font-size: 14px; margin-top: 4px; color: #666; }
-    .digest-card { padding: 15px; margin: 12px 20px; border-radius: 6px; border-left: 6px solid; }
-    .digest-card.high { border-left-color: #38a169; background-color: #f9fdfa; }
-    .digest-card.moderate { border-left-color: #805ad5; background-color: #f9f7fd; }
-    .digest-card h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; text-transform: uppercase; }
-    .digest-card.high h3 { color: #1b6f5a; }
-    .digest-card.moderate h3 { color: #553c9a; }
-    .digest-card p.title { margin: 0 0 6px; font-size: 15px; font-weight: 500; color: #222; }
-    .digest-card p.text { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: #333; }
-    .digest-card p.meta { margin: 0 0 4px; font-size: 14px; }
-    .digest-card p.published { margin: 0 0 6px; font-size: 11px; color: #555; }
-    .digest-card a { color: #2b6cb0; text-decoration: none; font-size: 14px; }
-    .footer { background-color: #f1f1f1; text-align: center; padding: 15px; font-size: 12px; color: #555; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Daily Digest</h1>
-      <div class="date">${date}</div>
-    </div>
-    ${cards}
-    <div class="footer">
-      You are receiving this digest from Knowledgebase.<br/>
-      <a href="#">Unsubscribe</a> · <a href="#">View Repo</a>
-    </div>
-  </div>
-</body>
-</html>`;
+  return map;
 }
 
-// ---------- Text + JSON renderers unchanged ----------
-function renderText(date, items) {
-  if (!items.length) {
-    return `Daily Digest – ${date}\n\nThere are no highly or moderately useful items today.\nStay Calm and Build On.`;
-  }
-  return `Daily Digest – ${date}\n\n${items
-    .map((it) => {
-      const proj = (it.projects || [])[0];
-      return `- ${it.title || "(untitled)"}\n  URL: ${it.url || ""}\n  Usefulness: ${proj?.usefulness || "LOW"}\n  Why: ${proj?.reason || ""}\n  Next steps: ${proj?.nextSteps || ""}\n  Summary: ${it.summary || ""}`;
-    })
-    .join("\n\n")}`;
-}
-
-function renderJson(date, items) {
-  return {
-    date,
-    count: items.length,
-    items: items.map((it) => {
-      const proj = (it.projects || [])[0] || {};
-      return {
-        id: it.id,
-        title: it.title,
-        url: it.url,
-        usefulness: proj.usefulness || "LOW",
-        reason: proj.reason || "",
-        nextSteps: proj.nextSteps || "",
-        summary: it.summary || ""
-      };
-    }),
-    note: items.length
-      ? undefined
-      : "There are no highly or moderately useful items today. Stay Calm and Build On."
-  };
-}
-
-// ---------- Main ----------
 export async function digest() {
-  const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
-  const date = todayIsoDate();
-  const stamp = safeFilenameDate();
+  const curatedRun = await getLatestRun(CURATED_ROOT);
+  if (!curatedRun) {
+    log("No curated data found; skip digest");
+    return null;
+  }
 
-  // Only include HIGH or MODERATE usefulness items
-  const useful = knowledge.items.filter((it) =>
-    (it.projects || []).some(
-      (p) => p.usefulness === "HIGH" || p.usefulness === "MODERATE"
-    )
-  );
+  const projects = await loadProjects();
+  const projectMap = new Map(projects.map((project) => [project.key, project]));
 
-  const outDir = path.join(DIGEST_DIR, date, stamp);
-  const dailyDir = path.join(DIGEST_DIR, date);         // ← stable daily path
-  const latestDir = path.join(DIGEST_DIR, "latest");
-  await ensureDir(outDir);
-  await ensureDir(dailyDir);
-  await ensureDir(latestDir);
+  const digestDir = path.join(DIGEST_ROOT, curatedRun.dayDir, curatedRun.stampDir);
+  await ensureDir(digestDir);
 
-  const html = renderHtml(date, useful);
-  const txt = renderText(date, useful);
-  const json = renderJson(date, useful);
+  const jsonPath = path.join(digestDir, "digest.json");
+  const textPath = path.join(digestDir, "digest.txt");
+  const htmlPath = path.join(digestDir, "digest.html");
 
-  // Timestamped
-  const files = {
-    html: path.join(outDir, "digest.html"),
-    txt: path.join(outDir, "digest.txt"),
-    json: path.join(outDir, "digest.json"),
-    // Stable daily
-    daily_html: path.join(dailyDir, "digest.html"),
-    daily_txt: path.join(dailyDir, "digest.txt"),
-    daily_json: path.join(dailyDir, "digest.json"),
-    // Latest
-    latest_html: path.join(latestDir, "digest.html"),
-    latest_txt: path.join(latestDir, "digest.txt"),
-    latest_json: path.join(latestDir, "digest.json"),
+  const digestPayload = (await loadJson(jsonPath, null)) || {
+    generatedAt: new Date().toISOString(),
+    subject: "",
+    totalHigh: 0,
+    totalModerate: 0,
+    projects: []
   };
 
-  // Write all variants
-  await fs.writeFile(files.html, html, "utf8");
-  await fs.writeFile(files.txt, txt, "utf8");
-  await fs.writeFile(files.json, JSON.stringify(json, null, 2), "utf8");
+  for (const [projectKey, project] of projectMap.entries()) {
+    if (digestPayload.projects.some((p) => p.key === projectKey)) continue;
 
-  await fs.writeFile(files.daily_html, html, "utf8");
-  await fs.writeFile(files.daily_txt, txt, "utf8");
-  await fs.writeFile(files.daily_json, JSON.stringify(json, null, 2), "utf8");
+    const { high, moderate } = collectItemsForProject(curatedRun.content, project);
+    if (!high.length && !moderate.length) continue;
 
-  await fs.writeFile(files.latest_html, html, "utf8");
-  await fs.writeFile(files.latest_txt, txt, "utf8");
-  await fs.writeFile(files.latest_json, JSON.stringify(json, null, 2), "utf8");
+    const projectDigest = {
+      key: projectKey,
+      name: project.name,
+      summary: project.summary,
+      high,
+      moderate,
+      changelog: project.changelog ?? []
+    };
 
-  log("Digest built", { date, count: useful.length });
-  return { date, files, dir: outDir, payload: json };
+    digestPayload.projects.push(projectDigest);
+    digestPayload.totalHigh += high.length;
+    digestPayload.totalModerate += moderate.length;
+    digestPayload.subject = `Daily Digest – ${digestPayload.totalHigh} Highly Useful + ${digestPayload.totalModerate} Moderately Useful`;
+
+    await saveJsonCheckpoint(jsonPath, digestPayload);
+    await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+    await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
+
+    await syncDigest({ files: { json: jsonPath, txt: textPath, html: htmlPath } });
+    await sleep(1000);
+
+    log("Checkpoint saved + synced", { project: project.name });
+  }
+
+  const usage = await loadJson(USAGE_FILE, { runs: [] });
+  const latestRun = usage.runs?.[usage.runs.length - 1];
+  if (latestRun?.stages) {
+    const totalTokens = Object.values(latestRun.stages)
+      .flatMap((stage) => Object.values(stage || {}))
+      .reduce((sum, m) => sum + (m?.total || 0), 0);
+
+    digestPayload.tokenUsage = { ...latestRun.stages, totalTokens };
+
+    await saveJsonCheckpoint(jsonPath, digestPayload);
+    await saveTextCheckpoint(textPath, renderTextDigest(digestPayload));
+    await saveTextCheckpoint(htmlPath, renderHtmlDigest(digestPayload));
+
+    await syncDigest({ files: { json: jsonPath, txt: textPath, html: htmlPath } });
+    await sleep(1000);
+  }
+
+  log("Digest artifacts prepared", {
+    json: path.relative(ROOT_DIR, jsonPath),
+    text: path.relative(ROOT_DIR, textPath),
+    html: path.relative(ROOT_DIR, htmlPath)
+  });
+
+  // ✅ Always send email, even if no actionable items
+  if (!BREVO_API_KEY) {
+    log("BREVO_API_KEY missing; skipping email send");
+  } else {
+    const recipients = BREVO_TO.split(/[,;\s]+/).filter(Boolean);
+    if (!recipients.length) {
+      log("BREVO_TO not configured; skipping email send");
+    } else {
+      if (!digestPayload.projects?.length) {
+        log("📧 Sending fallback digest email (no actionable items)", { recipients });
+      } else {
+        log("📧 Sending digest email", {
+          recipients,
+          totalHigh: digestPayload.totalHigh,
+          totalModerate: digestPayload.totalModerate
+        });
+      }
+      await sendBrevoEmail({
+        subject: digestPayload.subject || "Daily Digest",
+        textContent: renderTextDigest(digestPayload),
+        htmlContent: renderHtmlDigest(digestPayload),
+        recipients
+      });
+    }
+  }
+
+  return {
+    dir: digestDir,
+    files: { json: jsonPath, txt: textPath, html: htmlPath },
+    payload: digestPayload
+  };
+}
+
+// --- Collect items for digest ---
+function collectItemsForProject(curated, project) {
+  const high = [];
+  const moderate = [];
+  for (const item of (curated.items ?? [])) {
+    const assignment = (item.projects ?? []).find(
+      (entry) => entry.projectKey === project.key || entry.project === project.name
+    );
+    if (!assignment) continue;
+    if (assignment.usefulness === "HIGH") {
+      high.push(buildDigestEntry(item, assignment));
+    } else if (assignment.usefulness === "MODERATE") {
+      moderate.push(buildDigestEntry(item, assignment));
+    }
+  }
+  return { high, moderate };
+}
+
+function buildDigestEntry(item, assignment) {
+  const published = item.publishedAt
+    ? new Date(item.publishedAt).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      })
+    : null;
+
+  return {
+    title: item.title ?? "(untitled)",
+    url: item.url ?? null,
+    summary: item.summary ?? item.description ?? "",
+    usefulness: assignment.usefulness,
+    reason: assignment.reason ?? "",
+    nextSteps: assignment.nextSteps ?? "",
+    publishedAt: published,
+    sourceType: item.sourceType ?? "unknown"
+  };
+}
+
+// --- TEXT rendering ---
+function renderTextDigest(payload) {
+  const lines = [];
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric"
+  });
+
+  lines.push("Daily Digest");
+  lines.push(dateStr);
+
+  if (!payload.projects?.length) {
+    lines.push("No actionable items today.");
+    lines.push("Stay calm and build on. 💪");
+    return lines.join("\n");
+  }
+
+  lines.push(
+    `News You Can Use Today:\n${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`
+  );
+  lines.push("");
+
+  for (const project of payload.projects) {
+    lines.push(project.name);
+    if (project.summary) lines.push(project.summary);
+    lines.push("");
+
+    if (project.high.length) {
+      lines.push("Highly Useful");
+      for (const entry of project.high) lines.push(formatTextEntry(entry));
+      lines.push("");
+    }
+
+    if (project.moderate.length) {
+      lines.push("Moderately Useful");
+      for (const entry of project.moderate) lines.push(formatTextEntry(entry));
+      lines.push("");
+    }
+
+    if (project.changelog.length) {
+      lines.push("Recent Changelog Notes");
+      for (const note of project.changelog.slice(0, 5)) lines.push(`- ${note}`);
+      lines.push("");
+    }
+  }
+
+  lines.push("You can still browse all recent updates, even those not flagged as useful:");
+  lines.push("View this digest on KB-site: https://vibestribe.github.io/kb-site/");
+  lines.push("");
+
+  if (payload.tokenUsage && payload.tokenUsage.totalTokens) {
+    const modelTotals = modelTotalsFromTokenUsage(payload.tokenUsage);
+    const parts = [];
+    for (const [model, total] of modelTotals.entries()) {
+      parts.push(`${model} ${tokensToK(total)}`);
+    }
+    lines.push(
+      `Token usage this run: ~${tokensToK(payload.tokenUsage.totalTokens)} (${parts.join(", ")}).`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatTextEntry(entry) {
+  const lines = [];
+  lines.push(`- ${entry.title}`);
+  if (entry.summary) lines.push(`  ${entry.summary}`);
+  if (entry.reason) lines.push(`  Why it matters: ${entry.reason}`);
+  if (entry.nextSteps) lines.push(`  Next steps: ${entry.nextSteps}`);
+  if (entry.publishedAt) lines.push(`  Published: ${entry.publishedAt}`);
+  if (entry.url) lines.push(`  Go to source: ${entry.url}`);
+  return lines.join("\n");
+}
+
+// --- HTML rendering ---
+function renderHtmlDigest(payload) {
+  const esc = (s) =>
+    String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const dateStr = new Date(payload.generatedAt).toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric"
+  });
+
+  const section = (title) => `<h3 style="margin:16px 0 8px 0;">${esc(title)}</h3>`;
+
+  const entryHtml = (e) => `
+    <div style="margin:8px 0 16px 0; line-height:1.4;">
+      <div style="font-weight:600;">${esc(e.title)}</div>
+      ${e.summary ? `<div>${esc(e.summary)}</div>` : ""}
+      ${e.reason ? `<div><em>Why it matters:</em> ${esc(e.reason)}</div>` : ""}
+      ${e.nextSteps ? `<div><em>Next steps:</em> ${esc(e.nextSteps)}</div>` : ""}
+      ${e.publishedAt ? `<div><em>Published:</em> ${esc(e.publishedAt)}</div>` : ""}
+      ${e.url ? `<div><a href="${esc(e.url)}" target="_blank" rel="noopener">Go to source</a></div>` : ""}
+    </div>`;
+
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${esc(payload.subject || "Daily Digest")}</title>
+</head>
+<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#111; margin:0; padding:0; background:#f7f7f8;">
+  <div style="max-width:720px; margin:0 auto; padding:24px;">
+    <h1 style="margin:0 0 6px 0;">Daily Digest</h1>
+    <div style="color:#555; margin-bottom:16px;">${esc(dateStr)}</div>`;
+
+  if (!payload.projects?.length) {
+    html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-bottom:16px;">
+      <div>No actionable items today.</div>
+      <div>Stay calm and build on. 💪</div>
+    </div>
+  </div>
+</body>
+</html>`;
+    return html;
+  }
+
+  html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-bottom:16px;">
+      <div style="font-weight:600; margin-bottom:8px;">News You Can Use Today</div>
+      <div>${esc(`${payload.totalHigh} Highly Useful + ${payload.totalModerate} Moderately Useful`)}</div>
+    </div>`;
+
+  for (const project of payload.projects) {
+    html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px 0;">
+      <h2 style="margin:0 0 6px 0;">${esc(project.name)}</h2>
+      ${project.summary ? `<div style="color:#444; margin-bottom:8px;">${esc(project.summary)}</div>` : ""}
+
+      ${project.high?.length ? section("Highly Useful") : ""}
+      ${project.high?.map(entryHtml).join("") || ""}
+
+      ${project.moderate?.length ? section("Moderately Useful") : ""}
+      ${project.moderate?.map(entryHtml).join("") || ""}
+
+      ${project.changelog?.length ? section("Recent Changelog Notes") : ""}
+      ${project.changelog?.slice(0, 5).map(n => `<div>- ${esc(n)}</div>`).join("") || ""}
+    </div>`;
+  }
+
+  html += `
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px 0;">
+      <div>You can still browse all recent updates, even those not flagged as useful.</div>
+      <div><a href="https://vibestribe.github.io/kb-site/" target="_blank" rel="noopener">View this digest on KB-site</a></div>
+    </div>`;
+
+  if (payload.tokenUsage && payload.tokenUsage.totalTokens) {
+    const modelTotals = modelTotalsFromTokenUsage(payload.tokenUsage);
+    const parts = [];
+    for (const [model, total] of modelTotals.entries()) {
+      parts.push(`${esc(model)} ${esc(tokensToK(total))}`);
+    }
+    html += `
+    <p style="color:#777; font-size:0.9em; margin:0 0 24px 0;">
+      Token usage this run: ~${esc(tokensToK(payload.tokenUsage.totalTokens))} (${parts.join(", ")}).
+    </p>`;
+  }
+
+  html += `
+  </div>
+</body>
+</html>`;
+
+  return html;
+}
+
+// --- Brevo email ---
+async function sendBrevoEmail({ subject, textContent, htmlContent, recipients }) {
+  try {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": BREVO_API_KEY
+      },
+      body: JSON.stringify({
+        sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
+        to: recipients.map((email) => ({ email })),
+        subject,
+        textContent,
+        htmlContent
+      })
+    });
+    if (!response.ok) throw new Error(`Brevo error: ${response.status} ${await response.text()}`);
+    log("Digest email sent", { recipients: recipients.length });
+  } catch (error) {
+    log("Failed to send Brevo email", { error: error.message });
+  }
+}
+
+// --- Helpers ---
+async function getLatestRun(root) {
+  const dayDirs = await listDirectories(root);
+  if (!dayDirs.length) return null;
+  dayDirs.sort().reverse();
+  for (const dayDir of dayDirs) {
+    const dayPath = path.join(root, dayDir);
+    const stampDirs = await listDirectories(dayPath);
+    stampDirs.sort().reverse();
+    for (const stampDir of stampDirs) {
+      const itemsPath = path.join(dayPath, stampDir, "items.json");
+      const content = await loadJson(itemsPath, null);
+      if (content) return { dayDir, stampDir, itemsPath, content };
+    }
+  }
+  return null;
+}
+
+async function loadProjects() {
+  const entries = await listDirectories(PROJECTS_ROOT);
+  const projects = [];
+  for (const dir of entries) {
+    const projectDir = path.join(PROJECTS_ROOT, dir);
+    const configPath = path.join(projectDir, "project.json");
+    const changelogPath = path.join(projectDir, "changelog.md");
+
+    const config = await loadJson(configPath, null);
+    if (!config) continue;
+
+    const changelog = await loadChangelog(changelogPath);
+
+    projects.push({ key: dir, changelog, ...config });
+  }
+  return projects;
+}
+
+async function loadChangelog(pathname) {
+  try {
+    const text = await fs.readFile(pathname, "utf8");
+    return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+  } catch {
+    return [];
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  digest().catch((err) => {
-    console.error("Digest step failed", err);
+  digest().catch((error) => {
+    console.error("Digest step failed", error);
     process.exitCode = 1;
   });
 }
