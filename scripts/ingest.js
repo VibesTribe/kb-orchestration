@@ -2,11 +2,15 @@
 // Ingest Raindrop collections, YouTube playlists, YouTube channels
 // with incremental checkpointing + per-item upstream push to prevent data loss.
 //
-// Improvements:
-//  - Dedup on both ID and URL
+// Idempotency & Safety:
+//  - Strict dedupe on both ID and URL against knowledge.json (source of truth)
+//  - Per-source seenIds persisted (state.json) to avoid refetch churn
+//  - Never truncates knowledge.json
 //  - Default 24h windows (unless overridden in sources.json)
 //  - Validate channel/playlist IDs before calling APIs
-//  - Still preserves: bootstrap retry, backoff, per-source isolation
+//
+// Sync behavior:
+//  - After each item append, save knowledge.json and push upstream immediately
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -92,7 +96,7 @@ async function loadSourcesConfig() {
       out.raindropCollections.push({
         id: c.collectionId ?? c.id,
         mode: c.mode ?? "daily",
-        defaultWindow: Number(c.defaultWindow ?? 1), // force 24h unless set
+        defaultWindow: Number(c.defaultWindow ?? 1), // 24h default
         name: c.name ?? `raindrop-${c.collectionId ?? c.id}`,
       });
     }
@@ -173,14 +177,23 @@ function isValidPlaylistId(id) {
   return typeof id === "string" && id.startsWith("PL") && id.length >= 16;
 }
 
-function isDuplicate(knowledge, item) {
-  return knowledge.items.find(
-    (k) => k.id === item.id || (k.url && item.url && k.url === item.url)
-  );
+// Build in-memory indexes for fast, stable dedupe across runs
+function buildDedupeIndexes(knowledge) {
+  const byId = new Set();
+  const byUrl = new Set();
+  for (const it of knowledge.items) {
+    if (it?.id) byId.add(String(it.id));
+    if (it?.url) byUrl.add(String(it.url));
+  }
+  return { byId, byUrl };
+}
+
+function isDuplicate(indexes, item) {
+  return (item.id && indexes.byId.has(String(item.id))) ||
+         (item.url && indexes.byUrl.has(String(item.url)));
 }
 
 // ------- RAINDROP -------
-// (unchanged except for dedupe check)
 
 async function fetchRaindropCollectionItems(collectionId, { sinceDate, page = 0, perPage = 50 } = {}) {
   const url = new URL(`https://api.raindrop.io/rest/v1/raindrops/${collectionId}`);
@@ -203,7 +216,7 @@ async function fetchRaindropCollectionItems(collectionId, { sinceDate, page = 0,
   return { items, hasMore: items.length === perPage };
 }
 
-async function ingestRaindropCollection(source, knowledge, state) {
+async function ingestRaindropCollection(source, knowledge, indexes, state) {
   if (!RAINDROP_TOKEN) {
     log("RAINDROP_TOKEN missing; skipping raindrop collection", { collection: source.id });
     return;
@@ -236,8 +249,11 @@ async function ingestRaindropCollection(source, knowledge, state) {
           ingestedAt: nowIso(),
         };
 
-        if (!isDuplicate(knowledge, item)) {
+        // Strict dedupe against knowledge.json
+        if (!isDuplicate(indexes, item)) {
           knowledge.items.push(item);
+          if (item.id) indexes.byId.add(String(item.id));
+          if (item.url) indexes.byUrl.add(String(item.url));
           await saveKnowledge(knowledge);
           added++;
         }
@@ -276,7 +292,7 @@ async function fetchYouTubePlaylistItems(playlistId, pageToken = null) {
   return res.json();
 }
 
-async function ingestYouTubePlaylist(source, knowledge, state) {
+async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
   if (!YOUTUBE_API_KEY) return;
   if (!isValidPlaylistId(source.id)) {
     log("Invalid playlist ID; skipping", { id: source.id });
@@ -310,8 +326,10 @@ async function ingestYouTubePlaylist(source, knowledge, state) {
           ingestedAt: nowIso(),
         };
 
-        if (!isDuplicate(knowledge, item)) {
+        if (!isDuplicate(indexes, item)) {
           knowledge.items.push(item);
+          indexes.byId.add(String(item.id));
+          indexes.byUrl.add(String(item.url));
           await saveKnowledge(knowledge);
           added++;
         }
@@ -351,7 +369,7 @@ async function fetchYouTubeChannelUploads(channelId, publishedAfterIso, pageToke
   return res.json();
 }
 
-async function ingestYouTubeChannel(source, knowledge, state) {
+async function ingestYouTubeChannel(source, knowledge, indexes, state) {
   if (!YOUTUBE_API_KEY) return;
   if (!isValidChannelId(source.id)) {
     log("Invalid channel ID; skipping", { id: source.id });
@@ -386,8 +404,10 @@ async function ingestYouTubeChannel(source, knowledge, state) {
           ingestedAt: nowIso(),
         };
 
-        if (!isDuplicate(knowledge, item)) {
+        if (!isDuplicate(indexes, item)) {
           knowledge.items.push(item);
+          indexes.byId.add(String(item.id));
+          indexes.byUrl.add(String(item.url));
           await saveKnowledge(knowledge);
           added++;
         }
@@ -416,20 +436,21 @@ export async function ingest() {
   const sources = await loadSourcesConfig();
   const state = await loadState();
   const knowledge = await loadKnowledge();
+  const indexes = buildDedupeIndexes(knowledge); // <-- source-of-truth dedupe
 
   // Order: Raindrop → Playlists → Channels
   for (const col of sources.raindropCollections) {
-    try { await ingestRaindropCollection(col, knowledge, state); }
+    try { await ingestRaindropCollection(col, knowledge, indexes, state); }
     catch (e) { log("Raindrop collection error", { id: col.id, error: e.message }); }
   }
 
   for (const pl of sources.youtubePlaylists) {
-    try { await ingestYouTubePlaylist(pl, knowledge, state); }
+    try { await ingestYouTubePlaylist(pl, knowledge, indexes, state); }
     catch (e) { log("YouTube playlist error", { id: pl.id, error: e.message }); }
   }
 
   for (const ch of sources.youtubeChannels) {
-    try { await ingestYouTubeChannel(ch, knowledge, state); }
+    try { await ingestYouTubeChannel(ch, knowledge, indexes, state); }
     catch (e) { log("YouTube channel error", { id: ch.id, error: e.message }); }
   }
 
