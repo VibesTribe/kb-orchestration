@@ -1,6 +1,6 @@
 // scripts/enrich.js
 // Enrichment flow focused on high-quality, classification-ready outputs.
-// Provider priority per item: Gemini (direct) → OpenAI (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
+// Provider priority per item: Gemini (direct) → OpenRouter (guardrailed) → DeepSeek (guardrailed).
 // YouTube: transcript → rich JSON (fullSummary + summary + enrichment).
 // Saves incrementally after each item. Fail-fast after N consecutive full failures.
 
@@ -11,7 +11,7 @@ import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
-import { callOpenAI } from "./lib/openai.js";
+// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled per request
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
@@ -187,7 +187,20 @@ export async function enrich(options = {}) {
   let processedCount = 0;
 
   for (const item of knowledge.items) {
-    if (state.processed.includes(item.id)) continue;
+    // Strong idempotent skip: if we already have good enrichment, mark processed and continue
+    const alreadyEnriched =
+      item?.fullSummary &&
+      item?.summary &&
+      item?.enrichment &&
+      !looksBad(item.fullSummary);
+
+    if (state.processed.includes(item.id) || alreadyEnriched) {
+      if (!state.processed.includes(item.id)) {
+        state.processed.push(item.id);
+        await saveJsonCheckpoint(STATE_FILE, state);
+      }
+      continue;
+    }
 
     let fullyFailed = false;
 
@@ -205,7 +218,7 @@ export async function enrich(options = {}) {
 
       const prompt = buildPromptJSON({ item, transcript });
 
-      // Priority chain: Gemini → OpenAI → OpenRouter (guardrailed) → DeepSeek (guardrailed)
+      // Priority chain: Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
       let text = "";
       let model = "";
       let rawUsage = null;
@@ -217,41 +230,32 @@ export async function enrich(options = {}) {
         rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
         log("Used Gemini for enrichment", { id: item.id, model });
       } catch (e1) {
-        log("Gemini failed; fallback to OpenAI", { id: item.id, error: e1.message });
+        log("Gemini failed; fallback to OpenRouter", { id: item.id, error: e1.message });
         try {
-          const r = await callOpenAI(prompt);
+          const r = await safeCall({
+            provider: "openrouter",
+            model: "rotation",
+            fn: () => callWithRotation(prompt, "enrich"),
+            estCost: 1
+          });
+          if (!r) throw new Error("OpenRouter skipped (cap reached)");
+          text = r.text;
+          model = r.model;
+          rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
+          log("Used OpenRouter for enrichment", { id: item.id, model, provider: r.provider });
+        } catch (e3) {
+          log("OpenRouter failed; fallback to DeepSeek", { id: item.id, error: e3.message });
+          const r = await safeCall({
+            provider: "deepseek",
+            model: "deepseek-chat",
+            fn: () => callDeepSeek(prompt),
+            estCost: 0.01
+          });
+          if (!r) throw new Error("DeepSeek skipped (cap reached)");
           text = r.text;
           model = r.model;
           rawUsage = r.rawUsage ?? null;
-          log("Used OpenAI for enrichment", { id: item.id, model });
-        } catch (e2) {
-          log("OpenAI failed; fallback to OpenRouter", { id: item.id, error: e2.message });
-          try {
-            const r = await safeCall({
-              provider: "openrouter",
-              model: "rotation",
-              fn: () => callWithRotation(prompt, "enrich"),
-              estCost: 1
-            });
-            if (!r) throw new Error("OpenRouter skipped (cap reached)");
-            text = r.text;
-            model = r.model;
-            rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
-            log("Used OpenRouter for enrichment", { id: item.id, model, provider: r.provider });
-          } catch (e3) {
-            log("OpenRouter failed; fallback to DeepSeek", { id: item.id, error: e3.message });
-            const r = await safeCall({
-              provider: "deepseek",
-              model: "deepseek-chat",
-              fn: () => callDeepSeek(prompt),
-              estCost: 0.01
-            });
-            if (!r) throw new Error("DeepSeek skipped (cap reached)");
-            text = r.text;
-            model = r.model;
-            rawUsage = r.rawUsage ?? null;
-            log("Used DeepSeek direct for enrichment", { id: item.id, model });
-          }
+          log("Used DeepSeek direct for enrichment", { id: item.id, model });
         }
       }
 
@@ -260,12 +264,14 @@ export async function enrich(options = {}) {
       const fullSummary =
         parsed?.full_summary ??
         parsed?.fullSummary ??
-        parsed?.summary ?? "";
+        parsed?.summary ??
+        "";
       const shortSummary =
         parsed?.summary ??
         parsed?.short_summary ??
         parsed?.shortSummary ??
-        parsed?.blurb ?? "";
+        parsed?.blurb ??
+        "";
 
       if (!fullSummary || looksBad(fullSummary)) {
         log("Invalid enrichment output (fullSummary)", { id: item.id, model });
@@ -319,8 +325,8 @@ export async function enrich(options = {}) {
           `Fail-fast: ${consecutiveFails} consecutive items failed to enrich across all providers`
         );
       }
-      const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
-      await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
+      const knowledgeReload = await loadJson(KNOWLEDGE_FILE, { items: [] });
+      await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledgeReload);
       await saveJsonCheckpoint(STATE_FILE, await loadJson(STATE_FILE, { processed: [] }));
     }
   }
