@@ -18,6 +18,7 @@ import { classify } from "./classify.js";
 import { digest } from "./digest.js";
 import { publish } from "./publish.js";
 import { pullKnowledge, syncKnowledge, syncDigest } from "./lib/kb-sync.js";
+import { startUsageRun } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -65,6 +66,13 @@ async function writeBootstrapDone() {
 async function run() {
   log("🚀 Starting knowledge pipeline…");
 
+  // NEW: start a fresh token-usage run
+  try {
+    await startUsageRun();
+  } catch (e) {
+    log("⚠️ startUsageRun failed; continuing", { error: e?.message });
+  }
+
   // Determine mode (bootstrap vs daily)
   const boot = await readBootstrapState();
   const mode = boot.bootstrapDone ? "daily" : "bootstrap";
@@ -79,8 +87,6 @@ async function run() {
   const stageOpts = {
     mode, // "bootstrap" | "daily"
     failFast: { maxConsecutiveFails: MAX_CONSECUTIVE_FAILS },
-    // You can add stage-specific knobs here later, e.g. windows:
-    // windows: { channelsHours: mode === "bootstrap" ? 48 : 24, raindropHours: 24, playlists: mode === "bootstrap" ? "full" : "skip" }
   };
 
   try {
@@ -129,7 +135,6 @@ async function run() {
 
     log("✅ Pipeline completed successfully!");
   } catch (err) {
-    // Stages that implement fail-fast should throw; we just surface and exit non-zero.
     log("❌ Pipeline failed", { error: err?.message ?? String(err) });
     process.exit(1);
   }
