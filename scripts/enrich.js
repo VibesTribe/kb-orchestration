@@ -22,7 +22,7 @@ import { callGemini } from "./lib/gemini.js";
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
-import { logStageUsage } from "./lib/token-usage.js";
+import { logStageUsage, estimateTokensFromText } from "./lib/token-usage.js";
 import { syncKnowledge, pushUpdate } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -279,13 +279,15 @@ export async function enrich(options = {}) {
       // Priority chain: Gemini → OpenRouter (guardrailed) → DeepSeek (guardrailed)
       let text = "";
       let model = "";
+      let provider = ""; // <-- NEW: capture provider explicitly
       let rawUsage = null;
 
       try {
         const r = await callGemini(prompt);
         text = r.text;
         model = r.model;
-        rawUsage = { total_tokens: r.tokens ?? 0, provider: "gemini" };
+        provider = "gemini";
+        rawUsage = { total_tokens: r.tokens ?? 0, provider };
         log("Used Gemini for enrichment", { id: item.id, model });
       } catch (e1) {
         log("Gemini failed; fallback to OpenRouter", { id: item.id, error: e1.message });
@@ -299,8 +301,9 @@ export async function enrich(options = {}) {
           if (!r) throw new Error("OpenRouter skipped (cap reached)");
           text = r.text;
           model = r.model;
-          rawUsage = { ...r.rawUsage, provider: r.provider || "openrouter" };
-          log("Used OpenRouter for enrichment", { id: item.id, model, provider: r.provider });
+          provider = r.provider || "openrouter";
+          rawUsage = { ...r.rawUsage, provider };
+          log("Used OpenRouter for enrichment", { id: item.id, model, provider });
         } catch (e3) {
           log("OpenRouter failed; fallback to DeepSeek", { id: item.id, error: e3.message });
           const r = await safeCall({
@@ -312,7 +315,8 @@ export async function enrich(options = {}) {
           if (!r) throw new Error("DeepSeek skipped (cap reached)");
           text = r.text;
           model = r.model;
-          rawUsage = r.rawUsage ?? null;
+          provider = "deepseek";
+          rawUsage = r.rawUsage ? { ...r.rawUsage, provider } : { provider };
           log("Used DeepSeek direct for enrichment", { id: item.id, model });
         }
       }
@@ -356,6 +360,21 @@ export async function enrich(options = {}) {
           model_used: model
         };
 
+        // --- NEW: per-item token usage in knowledge.json
+        const inputTokens = rawUsage?.prompt_tokens ?? estimateTokensFromText(prompt);
+        const outputTokens = rawUsage?.completion_tokens ?? estimateTokensFromText(text);
+        const totalTokens = rawUsage?.total_tokens ?? (inputTokens + outputTokens);
+
+        item.usage = item.usage || {};
+        item.usage.enrich = {
+          model,
+          provider,
+          inputTokens,
+          outputTokens,
+          totalTokens,
+          ts: new Date().toISOString()
+        };
+
         // NOTE: we intentionally do NOT store transcript text in knowledge.json to keep it slim.
         // The transcript (if any) is persisted as a file under data/transcripts and pushed to KB.
 
@@ -364,11 +383,18 @@ export async function enrich(options = {}) {
         await saveJsonCheckpoint(STATE_FILE, state);
 
         await syncKnowledge(); // push knowledge.json & state changes
-        await logStageUsage("enrich", model, prompt, text, item.id, rawUsage);
+        await logStageUsage("enrich", model, prompt, text, item.id, { ...rawUsage, provider });
 
         processedCount++;
         consecutiveFails = 0;
-        log("Enriched item", { id: item.id, model, yt: Boolean(videoId), transcript_used: Boolean(transcript && transcript.trim().length > 0) });
+        log("Enriched item", {
+          id: item.id,
+          model,
+          provider,
+          yt: Boolean(videoId),
+          transcript_used: Boolean(transcript && transcript.trim().length > 0),
+          tokens: totalTokens
+        });
 
         await sleep(5000); // throttle
       }
