@@ -109,7 +109,7 @@ async function loadSourcesConfig() {
         id: p.playlistId ?? p.id,
         mode: p.mode ?? "once",
         defaultWindow: Number(p.defaultWindow ?? 1),
-        maxPages: Number(p.maxPages ?? 1), // <-- enforce single page by default
+        maxPages: Number(p.maxPages ?? 1), // single page by default
         name: p.name ?? p.label ?? `yt-playlist-${p.playlistId ?? p.id}`,
       });
     }
@@ -121,7 +121,7 @@ async function loadSourcesConfig() {
         id: ch.channelId ?? ch.id,
         mode: ch.mode ?? "daily",
         defaultWindow: Number(ch.defaultWindow ?? 1),
-        maxPages: Number(ch.maxPages ?? 1), // <-- enforce single page by default
+        maxPages: Number(ch.maxPages ?? 1), // single page by default
         name: ch.name ?? ch.label ?? `yt-channel-${ch.channelId ?? ch.id}`,
       });
     }
@@ -192,13 +192,18 @@ function buildDedupeIndexes(knowledge) {
 }
 
 function isDuplicate(indexes, item) {
-  return (item.id && indexes.byId.has(String(item.id))) ||
-         (item.url && indexes.byUrl.has(String(item.url)));
+  return (
+    (item.id && indexes.byId.has(String(item.id))) ||
+    (item.url && indexes.byUrl.has(String(item.url)))
+  );
 }
 
 // ------- RAINDROP -------
 
-async function fetchRaindropCollectionItems(collectionId, { sinceDate, page = 0, perPage = 50 } = {}) {
+async function fetchRaindropCollectionItems(
+  collectionId,
+  { sinceDate, page = 0, perPage = 50 } = {}
+) {
   const url = new URL(`https://api.raindrop.io/rest/v1/raindrops/${collectionId}`);
   url.searchParams.set("page", String(page));
   url.searchParams.set("perpage", String(perPage));
@@ -235,7 +240,10 @@ async function ingestRaindropCollection(source, knowledge, indexes, state) {
 
   try {
     while (true) {
-      const { items, hasMore } = await fetchRaindropCollectionItems(source.id, { sinceDate, page });
+      const { items, hasMore } = await fetchRaindropCollectionItems(source.id, {
+        sinceDate,
+        page,
+      });
       if (!items.length) break;
 
       for (const it of items) {
@@ -319,7 +327,7 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
       for (const it of json.items || []) {
         const snippet = it.snippet || {};
         const publishedAt = snippet.publishedAt || null;
-        // Enforce 24h window (or configured)
+        // Enforce 24h window (YouTube playlistItems has no publishedAfter param)
         if (publishedAt && new Date(publishedAt) < new Date(afterIso)) continue;
 
         const videoId = it.contentDetails?.videoId || snippet?.resourceId?.videoId;
@@ -349,7 +357,7 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
 
       pageToken = json.nextPageToken || null;
       pageCount++;
-    } while (pageToken && pageCount < (source.maxPages ?? 1)); // <-- stop after maxPages
+    } while (pageToken && pageCount < (source.maxPages ?? 1)); // stop after maxPages
 
     markSuccess(srcState);
     state.sources[sKey] = srcState;
@@ -408,7 +416,7 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
 
         const snippet = it.snippet || {};
         const publishedAt = snippet.publishedAt || null;
-        // Defensive double-check for window (API should already restrict)
+        // Defensive double-check (API should already restrict by publishedAfter)
         if (publishedAt && new Date(publishedAt) < new Date(afterIso)) continue;
 
         const item = {
@@ -433,7 +441,7 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
       }
       pageToken = json.nextPageToken || null;
       pageCount++;
-    } while (pageToken && pageCount < (source.maxPages ?? 1)); // <-- stop after maxPages
+    } while (pageToken && pageCount < (source.maxPages ?? 1)); // stop after maxPages
 
     markSuccess(srcState);
     state.sources[sKey] = srcState;
