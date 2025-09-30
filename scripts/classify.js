@@ -4,6 +4,7 @@
 // Stores results incrementally to knowledge.json after each project classification,
 // and syncs immediately to the knowledgebase repo.
 // Uses fullSummary (preferred) for richer signal; falls back to summary/description/title.
+// Idempotent: if item already classified for all active projects, skip (even if cache is empty).
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,12 +12,12 @@ import { fileURLToPath } from "node:url";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
-// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled per request
+// import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
 import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage } from "./lib/token-usage.js";
-import { syncKnowledge } from "./lib/kb-sync.js";   // ✅ push immediately
+import { syncKnowledge } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -122,6 +123,27 @@ function isFullyClassifiedForActiveProjects(item, activeProjects) {
   return remaining.size === 0;
 }
 
+function upsertProjectClassification(item, project, data) {
+  item.projects = Array.isArray(item.projects) ? item.projects : [];
+  const idx = item.projects.findIndex(
+    (x) => x.projectKey === project.key || x.project === project.name
+  );
+  const payload = {
+    project: project.name,
+    projectKey: project.key,
+    usefulness: data.usefulness,
+    reason: data.reason,
+    nextSteps: data.nextSteps,
+    modelUsed: data.modelUsed
+  };
+  if (idx >= 0) {
+    // Only fill missing fields; don't create duplicates
+    item.projects[idx] = { ...item.projects[idx], ...payload };
+  } else {
+    item.projects.push(payload);
+  }
+}
+
 // ---------- Main classification ----------
 export async function classify(options = {}) {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
@@ -137,8 +159,8 @@ export async function classify(options = {}) {
   );
 
   for (const item of knowledge.items) {
-    // Idempotent skip: if state says processed OR the item already has classifications for all active projects
-    if (state.processed.includes(item.id) || isFullyClassifiedForActiveProjects(item, activeProjects)) {
+    // Knowledge-first idempotent skip
+    if (isFullyClassifiedForActiveProjects(item, activeProjects) || state.processed.includes(item.id)) {
       if (!state.processed.includes(item.id)) {
         state.processed.push(item.id);
         await saveJsonCheckpoint(STATE_FILE, state);
@@ -149,14 +171,12 @@ export async function classify(options = {}) {
     let anySuccessForItem = false;
 
     try {
-      item.projects = Array.isArray(item.projects) ? item.projects : [];
-
       for (const project of activeProjects) {
         // Per-project skip if already classified for this project
-        const already = item.projects.find(
-          (x) => x.projectKey === project.key || x.project === project.name
+        const existing = (item.projects || []).find(
+          (x) => (x.projectKey === project.key || x.project === project.name) && x.usefulness
         );
-        if (already && already.usefulness) continue;
+        if (existing) continue;
 
         const prompt = buildPrompt({ project, item });
 
@@ -203,9 +223,7 @@ export async function classify(options = {}) {
         const reason = extractReason(text);
         const nextSteps = extractNextSteps(text);
 
-        item.projects.push({
-          project: project.name,
-          projectKey: project.key,
+        upsertProjectClassification(item, project, {
           usefulness,
           reason,
           nextSteps,
@@ -217,8 +235,8 @@ export async function classify(options = {}) {
         await saveJsonCheckpoint(KNOWLEDGE_FILE, knowledge);
         await saveJsonCheckpoint(STATE_FILE, state);
 
-        await syncKnowledge();   // ✅ push immediately
-        await sleep(5000);       // ✅ throttle to ~12/min
+        await syncKnowledge();   // push immediately
+        await sleep(5000);       // throttle
 
         classifiedCount++;
         anySuccessForItem = true;
@@ -261,4 +279,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
