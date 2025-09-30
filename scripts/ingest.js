@@ -8,6 +8,7 @@
 //  - Never truncates knowledge.json
 //  - Default 24h windows (unless overridden in sources.json)
 //  - Validate channel/playlist IDs before calling APIs
+//  - Respect maxPages=1 (or configured) to avoid quota blowups
 //
 // Sync behavior:
 //  - After each item append, save knowledge.json and push upstream immediately
@@ -97,7 +98,7 @@ async function loadSourcesConfig() {
         id: c.collectionId ?? c.id,
         mode: c.mode ?? "daily",
         defaultWindow: Number(c.defaultWindow ?? 1), // 24h default
-        name: c.name ?? `raindrop-${c.collectionId ?? c.id}`,
+        name: c.name ?? c.label ?? `raindrop-${c.collectionId ?? c.id}`,
       });
     }
   }
@@ -108,7 +109,8 @@ async function loadSourcesConfig() {
         id: p.playlistId ?? p.id,
         mode: p.mode ?? "once",
         defaultWindow: Number(p.defaultWindow ?? 1),
-        name: p.name ?? `yt-playlist-${p.playlistId ?? p.id}`,
+        maxPages: Number(p.maxPages ?? 1), // <-- enforce single page by default
+        name: p.name ?? p.label ?? `yt-playlist-${p.playlistId ?? p.id}`,
       });
     }
   }
@@ -119,7 +121,8 @@ async function loadSourcesConfig() {
         id: ch.channelId ?? ch.id,
         mode: ch.mode ?? "daily",
         defaultWindow: Number(ch.defaultWindow ?? 1),
-        name: ch.name ?? `yt-channel-${ch.channelId ?? ch.id}`,
+        maxPages: Number(ch.maxPages ?? 1), // <-- enforce single page by default
+        name: ch.name ?? ch.label ?? `yt-channel-${ch.channelId ?? ch.id}`,
       });
     }
   }
@@ -304,25 +307,32 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
   if (shouldSkipByBackoff(srcState)) return;
   if (source.mode === "once" && srcState.lastSuccess) return;
 
+  const afterIso = daysAgo(source.defaultWindow).toISOString();
   let pageToken = null;
+  let pageCount = 0;
   let added = 0;
 
   try {
     do {
       const json = await fetchYouTubePlaylistItems(source.id, pageToken);
+
       for (const it of json.items || []) {
-        const videoId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+        const snippet = it.snippet || {};
+        const publishedAt = snippet.publishedAt || null;
+        // Enforce 24h window (or configured)
+        if (publishedAt && new Date(publishedAt) < new Date(afterIso)) continue;
+
+        const videoId = it.contentDetails?.videoId || snippet?.resourceId?.videoId;
         if (!videoId) continue;
         if (srcState.seenIds[videoId]) continue;
 
-        const snippet = it.snippet || {};
         const item = {
           id: `youtube:video:${videoId}`,
           title: snippet.title || "(untitled)",
           url: `https://www.youtube.com/watch?v=${videoId}`,
           sourceType: "youtube",
           playlistId: source.id,
-          publishedAt: snippet.publishedAt || null,
+          publishedAt,
           ingestedAt: nowIso(),
         };
 
@@ -336,13 +346,15 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
 
         srcState.seenIds[videoId] = true;
       }
+
       pageToken = json.nextPageToken || null;
-    } while (pageToken);
+      pageCount++;
+    } while (pageToken && pageCount < (source.maxPages ?? 1)); // <-- stop after maxPages
 
     markSuccess(srcState);
     state.sources[sKey] = srcState;
     await saveState(state);
-    log("YouTube playlist ingested", { playlistId: source.id, added });
+    log("YouTube playlist ingested", { playlistId: source.id, added, pages: pageCount });
   } catch (e) {
     log("YouTube playlist error", { id: source.id, error: e.message });
     markFailure(srcState);
@@ -383,6 +395,7 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
 
   const afterIso = daysAgo(source.defaultWindow).toISOString();
   let pageToken = null;
+  let pageCount = 0;
   let added = 0;
 
   try {
@@ -394,13 +407,17 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
         if (srcState.seenIds[videoId]) continue;
 
         const snippet = it.snippet || {};
+        const publishedAt = snippet.publishedAt || null;
+        // Defensive double-check for window (API should already restrict)
+        if (publishedAt && new Date(publishedAt) < new Date(afterIso)) continue;
+
         const item = {
           id: `youtube:video:${videoId}`,
           title: snippet.title || "(untitled)",
           url: `https://www.youtube.com/watch?v=${videoId}`,
           sourceType: "youtube",
           channelId: source.id,
-          publishedAt: snippet.publishedAt || null,
+          publishedAt,
           ingestedAt: nowIso(),
         };
 
@@ -415,12 +432,13 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
         srcState.seenIds[videoId] = true;
       }
       pageToken = json.nextPageToken || null;
-    } while (pageToken);
+      pageCount++;
+    } while (pageToken && pageCount < (source.maxPages ?? 1)); // <-- stop after maxPages
 
     markSuccess(srcState);
     state.sources[sKey] = srcState;
     await saveState(state);
-    log("YouTube channel ingested", { channelId: source.id, added });
+    log("YouTube channel ingested", { channelId: source.id, added, pages: pageCount });
   } catch (e) {
     log("YouTube channel error", { id: source.id, error: e.message });
     markFailure(srcState);
