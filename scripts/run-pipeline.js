@@ -2,10 +2,15 @@
 // Orchestrates the full incremental knowledge pipeline:
 // ingest → enrich → classify → digest → publish → sync upstream
 //
-// Additions:
-// - Per-stage fail-fast thresholds (plumbed as options; stages may ignore until updated)
-// - Clear, mode-specific logging
-// - Force daily mode permanently (no fragile bootstrap cache)
+// Safe changes from previous version:
+// - Removed fragile bootstrap-state handling entirely
+// - Force `mode = "daily"` permanently (no cache reads/writes)
+// - Kept all other sequencing and behavior identical
+//
+// Notes:
+// - Pulls canonical knowledge.json first (non-fatal if it fails)
+// - Leaves ingest/enrich/classify/digest/publish/sync logic untouched
+// - Logging remains clear and mode-specific
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,12 +26,11 @@ import { startUsageRun } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const CACHE_DIR = path.join(ROOT, "data", "cache");
 
 // ---- Config (env overrides allowed) ----
 const MAX_CONSECUTIVE_FAILS = Number(process.env.MAX_CONSECUTIVE_FAILS ?? 5);
 
-// Helpers
+// Logging helper
 function log(msg, ctx = {}) {
   const ts = new Date().toISOString();
   console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
@@ -35,24 +39,23 @@ function log(msg, ctx = {}) {
 async function run() {
   log("🚀 Starting knowledge pipeline…");
 
-  // NEW: start a fresh token-usage run
+  // Token usage run (best-effort)
   try {
     await startUsageRun();
   } catch (e) {
     log("⚠️ startUsageRun failed; continuing", { error: e?.message });
   }
 
-  // 🔒 Force daily mode (skip fragile bootstrap-state.json)
+  // 🔒 Force daily mode (no bootstrap state, no cache file)
   const mode = "daily";
-
   log("🧭 Mode selected", {
     mode,
     maxConsecutiveFails: MAX_CONSECUTIVE_FAILS,
   });
 
-  // Options we pass to stages
+  // Options passed to stages (forward-compatible; stages may ignore)
   const stageOpts = {
-    mode,
+    mode, // "daily"
     failFast: { maxConsecutiveFails: MAX_CONSECUTIVE_FAILS },
   };
 
