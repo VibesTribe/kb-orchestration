@@ -211,11 +211,26 @@ function renderHtml(date, items, usage, changelog = []) {
 </html>`;
 }
 
-function renderText(date, items, usage) {
+function renderText(date, items, usage, changelog = []) {
+  let body;
   if (!items.length) {
-    return `Daily Digest – ${date}\n\nNo highly or moderately useful items today.\nStay Calm and Build On.${renderUsageText(usage)}`;
+    body = `Daily Digest – ${date}\n\nNo highly or moderately useful items today.\nStay Calm and Build On.`;
+  } else {
+    body = `Daily Digest – ${date}\n\n${items.map(it => `- ${it.title}
+  URL: ${it.url}
+  Usefulness: ${it.usefulness}
+  Why: ${it.reason}
+  Next steps: ${it.nextSteps}
+  Summary: ${it.summary}`).join("\n\n")}`;
   }
-  return `Daily Digest – ${date}\n\n${items.map(it => `- ${it.title}\n  URL: ${it.url}\n  Usefulness: ${it.usefulness}\n  Why: ${it.reason}\n  Next steps: ${it.nextSteps}\n  Summary: ${it.summary}`).join("\n\n")}${renderUsageText(usage)}`;
+
+  const usageText = renderUsageText(usage);
+
+  const changelogText = changelog.length
+    ? `\n\nRecent Changelog Notes:\n${changelog.map(c => `- ${c}`).join("\n")}`
+    : "";
+
+  return `${body}${usageText}${changelogText}`;
 }
 
 function renderJson(date, items, usage) {
@@ -261,7 +276,7 @@ export async function digest() {
   await ensureDir(runDir); await ensureDir(dailyDir); await ensureDir(latestDir);
 
   const html = renderHtml(date, entries, usage, changelog);
-  const txt = renderText(date, entries, usage);
+  const txt = renderText(date, entries, usage, changelog);
   const json = renderJson(date, entries, usage);
 
   const files = {
