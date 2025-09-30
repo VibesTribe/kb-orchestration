@@ -53,6 +53,7 @@ function buildUsefulEntries(knowledge) {
       reason: cls.reason || "",
       nextSteps: cls.nextSteps || "",
       publishedAt: it.publishedAt || it.createdAt || "",
+      project: cls.project || "General"
     });
   }
   // Sort so HIGH always come before MODERATE
@@ -75,7 +76,7 @@ function aggregateUsage(knowledge) {
       usage.enrich[key].count += 1;
     }
     if (it.usage?.classify) {
-      for (const [proj, u] of Object.entries(it.usage.classify)) {
+      for (const [, u] of Object.entries(it.usage.classify)) {
         const key = `${u.provider}:${u.model}`;
         usage.classify[key] = usage.classify[key] || { total: 0, count: 0 };
         usage.classify[key].total += u.totalTokens || 0;
@@ -89,20 +90,17 @@ function aggregateUsage(knowledge) {
 // ---- Renderers (HTML/Text/JSON)
 function renderUsageHtml(usage) {
   const rows = [];
-  for (const [stage, models] of Object.entries(usage)) {
+  for (const [, models] of Object.entries(usage)) {
     for (const [model, stats] of Object.entries(models)) {
-      rows.push(
-        `<tr><td>${stage}</td><td>${model}</td><td>${stats.total}</td><td>${stats.count}</td></tr>`
-      );
+      rows.push(`<li>${model} — ${stats.total} tokens</li>`);
     }
   }
   if (!rows.length) return "";
   return `
-    <h2 style="margin:20px 20px 10px;font-size:16px;color:#444">Token Usage</h2>
-    <table style="width:90%;margin:0 auto;border-collapse:collapse;font-size:13px;color:#333">
-      <thead><tr><th align="left">Stage</th><th align="left">Model</th><th align="right">Tokens</th><th align="right">Items</th></tr></thead>
-      <tbody>${rows.join("\n")}</tbody>
-    </table>`;
+    <div class="token-usage">
+      <h3>Token Usage (this run)</h3>
+      <ul>${rows.join("\n")}</ul>
+    </div>`;
 }
 
 function renderUsageText(usage) {
@@ -115,31 +113,100 @@ function renderUsageText(usage) {
   return lines.length ? `\n\nToken Usage:\n${lines.join("\n")}` : "";
 }
 
-function renderHtml(date, items, usage) {
-  if (!items.length) {
-    return `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8" /><title>Daily Digest – ${date}</title></head>
-<body>
-  <p>No highly or moderately useful items today.<br/><strong>Stay Calm and Build On.</strong></p>
-  ${renderUsageHtml(usage)}
-</body>
-</html>`;
+function renderHtml(date, items, usage, changelog = []) {
+  const grouped = {};
+  for (const it of items) {
+    if (!grouped[it.project]) grouped[it.project] = { HIGH: [], MODERATE: [] };
+    grouped[it.project][it.usefulness].push(it);
   }
 
-  const cards = items.map((it) => {
-    const isHigh = it.usefulness === "HIGH";
-    const label = isHigh ? "Highly Useful" : "Moderately Useful";
-    return `<div><h3>${label}</h3><p><strong>${escapeHtml(it.title)}</strong></p><p>${escapeHtml(it.summary)}</p></div>`;
+  const sections = Object.entries(grouped).map(([project, groups]) => {
+    const highCards = groups.HIGH.map((it) => `
+      <div class="digest-card high">
+        <p class="title">${escapeHtml(it.title)}</p>
+        ${it.summary ? `<p class="text">${escapeHtml(it.summary)}</p>` : ""}
+        ${it.reason ? `<p class="meta"><em>Why it matters:</em> <span>${escapeHtml(it.reason)}</span></p>` : ""}
+        ${it.nextSteps ? `<p class="meta"><em>Next steps:</em> <span>${escapeHtml(it.nextSteps)}</span></p>` : ""}
+        <p class="published">Published: ${escapeHtml(it.publishedAt || date)}</p>
+        ${it.url ? `<a href="${escapeHtml(it.url)}">Go to source</a>` : ""}
+      </div>`).join("\n");
+
+    const modCards = groups.MODERATE.map((it) => `
+      <div class="digest-card moderate">
+        <p class="title">${escapeHtml(it.title)}</p>
+        ${it.summary ? `<p class="text">${escapeHtml(it.summary)}</p>` : ""}
+        ${it.reason ? `<p class="meta"><em>Why it matters:</em> <span>${escapeHtml(it.reason)}</span></p>` : ""}
+        ${it.nextSteps ? `<p class="meta"><em>Next steps:</em> <span>${escapeHtml(it.nextSteps)}</span></p>` : ""}
+        <p class="published">Published: ${escapeHtml(it.publishedAt || date)}</p>
+        ${it.url ? `<a href="${escapeHtml(it.url)}">Go to source</a>` : ""}
+      </div>`).join("\n");
+
+    return `
+      <div class="section">
+        ${highCards ? `<h2>${project} – Highly Useful</h2>${highCards}` : ""}
+        ${modCards ? `<h2>${project} – Moderately Useful</h2>${modCards}` : ""}
+      </div>`;
   }).join("\n");
+
+  const changelogSection = changelog.length ? `
+    <div class="changelog">
+      <h3>Recent Changelog Notes</h3>
+      <ul>
+        ${changelog.map(c => `<li>${escapeHtml(c)}</li>`).join("\n")}
+      </ul>
+    </div>` : "";
 
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8" /><title>Daily Digest – ${date}</title></head>
+<head>
+  <meta charset="UTF-8">
+  <title>Daily Digest – ${date}</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f6f6f6; margin: 0; padding: 0; }
+    .container { width: 100%; max-width: 700px; margin: 20px auto; background-color: #ffffff;
+      border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .header { padding: 20px; text-align: center; }
+    .header h1 { margin: 0; font-size: 22px; font-weight: normal; color: #222; }
+    .date { font-size: 14px; margin-top: 4px; color: #666; }
+    h2 { margin: 6px 20px 4px 20px; font-size: 18px; font-weight: normal; color: #333; }
+    .digest-card { padding: 15px; margin: 6px 20px; border-radius: 6px; border-left: 6px solid; }
+    .digest-card.high { border-left-color: #38a169; background-color: #f9fdfa; }
+    .digest-card.moderate { border-left-color: #805ad5; background-color: #f9f7fd; }
+    .digest-card p.title { margin: 0 0 6px; font-size: 13px; font-weight: 500; color: #222; }
+    .digest-card p.text { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: #333; }
+    .digest-card p.meta { margin: 0 0 4px; font-size: 14px; }
+    .digest-card.high p.meta em, .digest-card.high p.meta span { color: #1b6f5a; }
+    .digest-card.moderate p.meta em, .digest-card.moderate p.meta span { color: #553c9a; }
+    .digest-card p.published { margin: 0 0 6px; font-size: 11px; color: #555; }
+    .digest-card a { color: #2b6cb0; text-decoration: none; font-size: 14px; }
+    .section { margin: 6px 0; padding-bottom: 4px; border-bottom: 1px solid #eee; }
+    .token-usage { margin: 6px 20px; font-size: 13px; color: #444; border-top: 1px solid #eee; padding: 6px 0; }
+    .token-usage h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+    .token-usage ul { margin: 0; padding-left: 18px; }
+    .changelog { margin: 6px 20px; font-size: 13px; color: #444; border-top: 1px solid #eee; border-bottom: 1px solid #eee; padding: 6px 0; }
+    .changelog h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #444; }
+    .changelog ul { margin: 0; padding-left: 18px; }
+    .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
+  </style>
+</head>
 <body>
-  <h1>Daily Digest (${date})</h1>
-  ${cards}
-  ${renderUsageHtml(usage)}
+  <div class="container">
+    <div class="header">
+      <h1>Daily Digest</h1>
+      <div class="date">${date}</div>
+    </div>
+
+    ${sections}
+
+    ${renderUsageHtml(usage)}
+
+    ${changelogSection}
+
+    <div class="footer">
+      You can still browse all recent updates, even those not flagged as useful.<br/>
+      <a href="#">View this digest on KB-site</a>
+    </div>
+  </div>
 </body>
 </html>`;
 }
@@ -184,6 +251,7 @@ export async function digest() {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
   const entries = buildUsefulEntries(knowledge);
   const usage = aggregateUsage(knowledge);
+  const changelog = knowledge.changelog || [];
   const date = todayIsoDate();
   const stamp = safeFilenameDate();
 
@@ -192,7 +260,7 @@ export async function digest() {
   const latestDir = path.join(DIGEST_DIR, "latest");
   await ensureDir(runDir); await ensureDir(dailyDir); await ensureDir(latestDir);
 
-  const html = renderHtml(date, entries, usage);
+  const html = renderHtml(date, entries, usage, changelog);
   const txt = renderText(date, entries, usage);
   const json = renderJson(date, entries, usage);
 
@@ -219,7 +287,7 @@ export async function digest() {
 
   const highCount = entries.filter((e) => e.usefulness === "HIGH").length;
   const modCount = entries.filter((e) => e.usefulness === "MODERATE").length;
-  log("Digest built", { date, count: entries.length, high: highCount, moderate: modCount, usage });
+  log("Digest built", { date, count: entries.length, high: highCount, moderate: modCount, usage, changelog });
 
   if (BREVO_API_KEY) {
     const recipients = BREVO_TO.split(/[,;\s]+/).filter(Boolean);
