@@ -17,7 +17,7 @@ import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
 import { digest } from "./digest.js";
 import { publish } from "./publish.js";
-import { syncKnowledge, syncDigest } from "./lib/kb-sync.js";
+import { pullKnowledge, syncKnowledge, syncDigest } from "./lib/kb-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -84,6 +84,14 @@ async function run() {
   };
 
   try {
+    // 0) Pull canonical knowledge.json first (non-fatal if it fails)
+    log("⬇️ Pulling knowledge.json from repo…");
+    try {
+      await pullKnowledge();
+    } catch (e) {
+      log("⚠️ pullKnowledge failed; continuing with local knowledge.json", { error: e?.message });
+    }
+
     // 1) Ingest
     log("📥 Ingesting…", { mode });
     await ingest(stageOpts);
