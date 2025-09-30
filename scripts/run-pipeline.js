@@ -3,10 +3,9 @@
 // ingest → enrich → classify → digest → publish → sync upstream
 //
 // Additions:
-// - Bootstrap awareness via data/cache/bootstrap-state.json
 // - Per-stage fail-fast thresholds (plumbed as options; stages may ignore until updated)
 // - Clear, mode-specific logging
-// - Marks bootstrap done only after a fully successful run
+// - Force daily mode permanently (no fragile bootstrap cache)
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -23,7 +22,6 @@ import { startUsageRun } from "./lib/token-usage.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const CACHE_DIR = path.join(ROOT, "data", "cache");
-const BOOTSTRAP_STATE_FILE = path.join(CACHE_DIR, "bootstrap-state.json");
 
 // ---- Config (env overrides allowed) ----
 const MAX_CONSECUTIVE_FAILS = Number(process.env.MAX_CONSECUTIVE_FAILS ?? 5);
@@ -31,36 +29,7 @@ const MAX_CONSECUTIVE_FAILS = Number(process.env.MAX_CONSECUTIVE_FAILS ?? 5);
 // Helpers
 function log(msg, ctx = {}) {
   const ts = new Date().toISOString();
-  // Avoid noisy empty {}
   console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
-}
-
-async function ensureCacheDir() {
-  await fs.mkdir(CACHE_DIR, { recursive: true });
-}
-
-async function readBootstrapState() {
-  await ensureCacheDir();
-  try {
-    const raw = await fs.readFile(BOOTSTRAP_STATE_FILE, "utf8");
-    const j = JSON.parse(raw);
-    return {
-      bootstrapDone: Boolean(j?.bootstrapDone),
-      completedAt: j?.completedAt ?? null,
-    };
-  } catch {
-    return { bootstrapDone: false, completedAt: null };
-  }
-}
-
-async function writeBootstrapDone() {
-  await ensureCacheDir();
-  const payload = {
-    bootstrapDone: true,
-    completedAt: new Date().toISOString(),
-  };
-  await fs.writeFile(BOOTSTRAP_STATE_FILE, JSON.stringify(payload, null, 2), "utf8");
-  log("📌 Bootstrap marked complete", payload);
 }
 
 async function run() {
@@ -73,19 +42,17 @@ async function run() {
     log("⚠️ startUsageRun failed; continuing", { error: e?.message });
   }
 
-  // Determine mode (bootstrap vs daily)
-  const boot = await readBootstrapState();
-  const mode = boot.bootstrapDone ? "daily" : "bootstrap";
+  // 🔒 Force daily mode (skip fragile bootstrap-state.json)
+  const mode = "daily";
 
   log("🧭 Mode selected", {
     mode,
-    bootstrapDone: boot.bootstrapDone,
     maxConsecutiveFails: MAX_CONSECUTIVE_FAILS,
   });
 
-  // Options we pass to stages. Stages may ignore until updated, but this is forward-compatible.
+  // Options we pass to stages
   const stageOpts = {
-    mode, // "bootstrap" | "daily"
+    mode,
     failFast: { maxConsecutiveFails: MAX_CONSECUTIVE_FAILS },
   };
 
@@ -126,11 +93,6 @@ async function run() {
     if (digestResult) {
       log("⬆️ Syncing digest artifacts…");
       await syncDigest(digestResult);
-    }
-
-    // If we reached here successfully in bootstrap mode, mark it done
-    if (mode === "bootstrap") {
-      await writeBootstrapDone();
     }
 
     log("✅ Pipeline completed successfully!");
