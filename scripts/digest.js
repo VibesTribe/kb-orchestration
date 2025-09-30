@@ -7,9 +7,9 @@ import { ensureDir, loadJson } from "./lib/utils.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DATA = path.join(ROOT, "data");
+const PROJECTS_DIR = path.join(ROOT, "projects");
 const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
 const DIGEST_DIR = path.join(DATA, "digest");
-const PROJECTS_DIR = path.join(ROOT, "projects");
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
@@ -87,43 +87,80 @@ function aggregateUsage(knowledge) {
   return totals;
 }
 
-// ---- Projects metadata (active only)
-async function loadActiveProjectsMeta() {
-  const meta = {}; // { [projectName]: { name, summary } }
+// ---- Load project metadata (name -> summary)
+async function loadProjectMeta() {
+  const meta = {};
   try {
     const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
-    for (const dirent of entries) {
-      if (!dirent.isDirectory()) continue;
-      const projName = dirent.name;
-      const pjPath = path.join(PROJECTS_DIR, projName, "project.json");
-      try {
-        const j = await loadJson(pjPath, null);
-        if (j && (j.status ?? "").toLowerCase() === "active") {
-          // prefer explicit "name" in file; fall back to folder
-          const name = j.name || projName;
-          const summary = j.summary || "";
-          meta[name] = { name, summary };
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        const pjPath = path.join(PROJECTS_DIR, e.name, "project.json");
+        try {
+          const pj = JSON.parse(await fs.readFile(pjPath, "utf8"));
+          if (pj.status === "active") {
+            meta[pj.name] = { summary: pj.summary || "" };
+          }
+        } catch {
+          // ignore bad or missing project.json
         }
-      } catch {
-        // ignore bad/missing project.json
       }
     }
   } catch {
-    // projects directory may not exist – that's fine
+    // ignore if no projects dir
   }
   return meta;
 }
 
-// ---- Count HIGH/MODERATE by project
+// ---- Count useful items per project
 function countByProject(items) {
-  const counts = {}; // { [project]: { high, moderate } }
+  const out = {};
   for (const it of items) {
-    const p = it.project || "General";
-    if (!counts[p]) counts[p] = { high: 0, moderate: 0 };
-    if (it.usefulness === "HIGH") counts[p].high++;
-    else if (it.usefulness === "MODERATE") counts[p].moderate++;
+    if (!out[it.project]) out[it.project] = { high: 0, moderate: 0 };
+    if (it.usefulness === "HIGH") out[it.project].high++;
+    if (it.usefulness === "MODERATE") out[it.project].moderate++;
   }
-  return counts;
+  return out;
+}
+
+// ---- Render "News You Can Use" (HTML)
+function renderNewsHtml(projectMeta, projectCounts) {
+  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
+  if (!names.length) return "";
+  const lines = names.map((name) => {
+    const { summary } = projectMeta[name];
+    const counts = projectCounts[name] || { high: 0, moderate: 0 };
+    const body =
+      counts.high + counts.moderate > 0
+        ? `${counts.high} Highly Useful · ${counts.moderate} Moderately Useful`
+        : `Nothing today · Stay Calm and Build On`;
+    return `
+      <div class="project-news">
+        <h2>${escapeHtml(name)} — ${escapeHtml(body)}</h2>
+        <p class="project-summary">${escapeHtml(summary)}</p>
+      </div>`;
+  }).join("\n");
+
+  return `
+    <div class="section">
+      <h2>News You Can Use</h2>
+      ${lines}
+    </div>`;
+}
+
+// ---- Render "News You Can Use" (Text)
+function renderNewsText(projectMeta, projectCounts) {
+  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
+  if (!names.length) return "";
+  const lines = names.map((name) => {
+    const { summary } = projectMeta[name];
+    const counts = projectCounts[name] || { high: 0, moderate: 0 };
+    const body =
+      counts.high + counts.moderate > 0
+        ? `${counts.high} Highly Useful · ${counts.moderate} Moderately Useful`
+        : `Nothing today · Stay Calm and Build On`;
+    return `${name} — ${body}\n${summary}`;
+  }).join("\n\n");
+  return `News You Can Use\n\n${lines}\n`;
 }
 
 // ---- Renderers (HTML/Text/JSON)
@@ -148,52 +185,15 @@ function renderUsageText(usage) {
   return lines.length ? `\n\nToken Usage:\n${lines.join("\n")}` : "";
 }
 
-// NEW: News You Can Use (HTML)
-function renderNewsHtml(projectMeta, projectCounts) {
-  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
-  if (!names.length) return "";
-  const lines = names.map((name) => {
-    const { summary } = projectMeta[name];
-    const counts = projectCounts[name] || { high: 0, moderate: 0 };
-    const body =
-      counts.high + counts.moderate > 0
-        ? `${counts.high} Highly Useful and ${counts.moderate} Moderately Useful things.`
-        : `Nothing today. Stay Calm and Build On.`;
-    return `
-      <p><strong>${escapeHtml(name)}</strong> — ${escapeHtml(summary)}</p>
-      <p>${escapeHtml(body)}</p>`;
-  }).join("\n");
-
-  // Use existing h2 styling; do not alter CSS or other sections
-  return `
-    <div class="section">
-      <h2>News You Can Use</h2>
-      ${lines}
-    </div>`;
-}
-
-// NEW: News You Can Use (Text)
-function renderNewsText(projectMeta, projectCounts) {
-  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
-  if (!names.length) return "";
-  const lines = names.map((name) => {
-    const { summary } = projectMeta[name];
-    const counts = projectCounts[name] || { high: 0, moderate: 0 };
-    const body =
-      counts.high + counts.moderate > 0
-        ? `${counts.high} Highly Useful and ${counts.moderate} Moderately Useful things.`
-        : `Nothing today. Stay Calm and Build On.`;
-    return `${name} — ${summary}\n${body}`;
-  }).join("\n\n");
-  return `News You Can Use\n\n${lines}\n`;
-}
-
-function renderHtml(date, items, usage, changelog = [], newsBlockHtml = "") {
+function renderHtml(date, items, usage, changelog = [], projectMeta = {}) {
   const grouped = {};
   for (const it of items) {
     if (!grouped[it.project]) grouped[it.project] = { HIGH: [], MODERATE: [] };
     grouped[it.project][it.usefulness].push(it);
   }
+
+  const projectCounts = countByProject(items);
+  const newsSection = renderNewsHtml(projectMeta, projectCounts);
 
   const sections = Object.entries(grouped).map(([project, groups]) => {
     const highCards = groups.HIGH.map((it) => `
@@ -268,6 +268,8 @@ function renderHtml(date, items, usage, changelog = [], newsBlockHtml = "") {
     .changelog h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #444; }
     .changelog ul { margin: 0; padding-left: 18px; }
     .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
+    .project-news { margin: 6px 20px; }
+    .project-summary { margin: 0 0 8px; font-size: 14px; color: #555; }
   </style>
 </head>
 <body>
@@ -277,7 +279,7 @@ function renderHtml(date, items, usage, changelog = [], newsBlockHtml = "") {
       <div class="date">${date}</div>
     </div>
 
-    ${newsBlockHtml}
+    ${newsSection}
 
     ${sections}
 
@@ -294,12 +296,15 @@ function renderHtml(date, items, usage, changelog = [], newsBlockHtml = "") {
 </html>`;
 }
 
-function renderText(date, items, usage, changelog = [], newsBlockText = "") {
+function renderText(date, items, usage, changelog = [], projectMeta = {}) {
+  const projectCounts = countByProject(items);
+  const newsText = renderNewsText(projectMeta, projectCounts);
+
   let body;
   if (!items.length) {
     body = `Daily Digest – ${date}\n\nNo highly or moderately useful items today.\nStay Calm and Build On.`;
   } else {
-    body = `Daily Digest – ${date}\n\n${newsBlockText}${items.map(it => `- ${it.title}
+    body = `Daily Digest – ${date}\n\n${newsText}\n${items.map(it => `- ${it.title}
   URL: ${it.url}
   Usefulness: ${it.usefulness}
   Why: ${it.reason}
@@ -350,22 +355,17 @@ export async function digest() {
   const entries = buildUsefulEntries(knowledge);
   const usage = aggregateUsage(knowledge);
   const changelog = knowledge.changelog || [];
+  const projectMeta = await loadProjectMeta();
   const date = todayIsoDate();
   const stamp = safeFilenameDate();
-
-  // NEW: gather project summaries + counts for News You Can Use
-  const projectMeta = await loadActiveProjectsMeta();
-  const projectCounts = countByProject(entries);
-  const newsHtml = renderNewsHtml(projectMeta, projectCounts);
-  const newsText = renderNewsText(projectMeta, projectCounts);
 
   const runDir = path.join(DIGEST_DIR, date, stamp);
   const dailyDir = path.join(DIGEST_DIR, date);
   const latestDir = path.join(DIGEST_DIR, "latest");
   await ensureDir(runDir); await ensureDir(dailyDir); await ensureDir(latestDir);
 
-  const html = renderHtml(date, entries, usage, changelog, newsHtml);
-  const txt = renderText(date, entries, usage, changelog, newsText);
+  const html = renderHtml(date, entries, usage, changelog, projectMeta);
+  const txt = renderText(date, entries, usage, changelog, projectMeta);
   const json = renderJson(date, entries, usage);
 
   const files = {
