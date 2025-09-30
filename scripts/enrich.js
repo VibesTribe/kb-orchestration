@@ -88,11 +88,11 @@ async function fetchTranscriptTimedText(videoId) {
   const chosen = pickBestTrack(parseTimedTextTracks(listXml));
   if (!chosen) return null;
 
-  // JSON3 first
-  const jsonUrl = `https://www.youtube.com/api/timedtext?fmt=json3&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
-  const jsonRes = await fetch(jsonUrl);
-  if (jsonRes.ok) {
-    try {
+  // Try JSON3 first
+  try {
+    const jsonUrl = `https://www.youtube.com/api/timedtext?fmt=json3&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
+    const jsonRes = await fetch(jsonUrl);
+    if (jsonRes.ok) {
       const j = await jsonRes.json();
       const parts = [];
       for (const ev of j.events || []) {
@@ -100,24 +100,49 @@ async function fetchTranscriptTimedText(videoId) {
       }
       const text = safeJoinText(parts);
       if (text) return text;
-    } catch {}
-  }
+    }
+  } catch {}
 
   // Fallback to VTT
-  const vttUrl = `https://www.youtube.com/api/timedtext?fmt=vtt&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
-  const vttRes = await fetch(vttUrl);
-  if (!vttRes.ok) return null;
-  const vtt = await vttRes.text();
-  const lines = vtt
-    .replace(/^WEBVTT.*$/m, "")
-    .split(/\r?\n/)
-    .filter(
-      (ln) =>
-        ln &&
-        !/^\d+$/.test(ln) &&
-        !/^\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}/.test(ln)
-    );
-  return safeJoinText(lines) || null;
+  try {
+    const vttUrl = `https://www.youtube.com/api/timedtext?fmt=vtt&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
+    const vttRes = await fetch(vttUrl);
+    if (vttRes.ok) {
+      const vtt = await vttRes.text();
+      const lines = vtt
+        .replace(/^WEBVTT.*$/m, "")
+        .split(/\r?\n/)
+        .filter(
+          (ln) =>
+            ln &&
+            !/^\d+$/.test(ln) &&
+            !/^\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}/.test(ln)
+        );
+      const text = safeJoinText(lines);
+      if (text) return text;
+    }
+  } catch {}
+
+  // Final fallback: SRV1 XML
+  try {
+    const srvUrl = `https://www.youtube.com/api/timedtext?fmt=srv1&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
+    const srvRes = await fetch(srvUrl);
+    if (srvRes.ok) {
+      const xml = await srvRes.text();
+      const lines = Array.from(xml.matchAll(/<text[^>]*>(.*?)<\/text>/g)).map((m) =>
+        m[1]
+          .replace(/&amp;/g, "&")
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+      );
+      const text = safeJoinText(lines);
+      if (text) return text;
+    }
+  } catch {}
+
+  return null;
 }
 
 function clamp(text, maxChars = 12000) {
