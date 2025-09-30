@@ -7,7 +7,6 @@ import { ensureDir, loadJson } from "./lib/utils.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DATA = path.join(ROOT, "data");
-const PROJECTS_DIR = path.join(ROOT, "projects");
 const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
 const DIGEST_DIR = path.join(DATA, "digest");
 
@@ -87,82 +86,6 @@ function aggregateUsage(knowledge) {
   return totals;
 }
 
-// ---- Load project metadata (name -> summary)
-async function loadProjectMeta() {
-  const meta = {};
-  try {
-    const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.isDirectory()) {
-        const pjPath = path.join(PROJECTS_DIR, e.name, "project.json");
-        try {
-          const pj = JSON.parse(await fs.readFile(pjPath, "utf8"));
-          if (pj.status === "active") {
-            meta[pj.name] = { summary: pj.summary || "" };
-          }
-        } catch {
-          // ignore bad or missing project.json
-        }
-      }
-    }
-  } catch {
-    // ignore if no projects dir
-  }
-  return meta;
-}
-
-// ---- Count useful items per project
-function countByProject(items) {
-  const out = {};
-  for (const it of items) {
-    if (!out[it.project]) out[it.project] = { high: 0, moderate: 0 };
-    if (it.usefulness === "HIGH") out[it.project].high++;
-    if (it.usefulness === "MODERATE") out[it.project].moderate++;
-  }
-  return out;
-}
-
-// ---- Render "News You Can Use" (HTML)
-function renderNewsHtml(projectMeta, projectCounts) {
-  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
-  if (!names.length) return "";
-  const lines = names.map((name) => {
-    const { summary } = projectMeta[name];
-    const counts = projectCounts[name] || { high: 0, moderate: 0 };
-    const body =
-      counts.high + counts.moderate > 0
-        ? `${counts.high} Highly Useful · ${counts.moderate} Moderately Useful`
-        : `Nothing today · Stay Calm and Build On`;
-    return `
-      <div class="project-news">
-        <h2>${escapeHtml(name)} — ${escapeHtml(body)}</h2>
-        <p class="project-summary">${escapeHtml(summary)}</p>
-      </div>`;
-  }).join("\n");
-
-  return `
-    <div class="section">
-      <h2>News You Can Use</h2>
-      ${lines}
-    </div>`;
-}
-
-// ---- Render "News You Can Use" (Text)
-function renderNewsText(projectMeta, projectCounts) {
-  const names = Object.keys(projectMeta).sort((a, b) => a.localeCompare(b));
-  if (!names.length) return "";
-  const lines = names.map((name) => {
-    const { summary } = projectMeta[name];
-    const counts = projectCounts[name] || { high: 0, moderate: 0 };
-    const body =
-      counts.high + counts.moderate > 0
-        ? `${counts.high} Highly Useful · ${counts.moderate} Moderately Useful`
-        : `Nothing today · Stay Calm and Build On`;
-    return `${name} — ${body}\n${summary}`;
-  }).join("\n\n");
-  return `News You Can Use\n\n${lines}\n`;
-}
-
 // ---- Renderers (HTML/Text/JSON)
 function renderUsageHtml(usage) {
   const rows = [];
@@ -185,15 +108,49 @@ function renderUsageText(usage) {
   return lines.length ? `\n\nToken Usage:\n${lines.join("\n")}` : "";
 }
 
-function renderHtml(date, items, usage, changelog = [], projectMeta = {}) {
+function renderProjectOverview(entries, knowledge) {
+  // Group entries by project
+  const grouped = {};
+  for (const it of entries) {
+    if (!grouped[it.project]) grouped[it.project] = { HIGH: 0, MODERATE: 0 };
+    grouped[it.project][it.usefulness] += 1;
+  }
+
+  // Load project summaries from project.json if available
+  const projectDirs = ["projects/vibeflow"]; // future: scan dynamically
+  const summaries = {};
+  for (const dir of projectDirs) {
+    try {
+      const pj = JSON.parse(fs.readFileSync(path.join(ROOT, dir, "project.json"), "utf8"));
+      summaries[pj.name] = pj.summary;
+    } catch {
+      // ignore missing
+    }
+  }
+
+  let html = `<div class="project-news"><h2>News You Can Use</h2>`;
+  for (const [project, counts] of Object.entries(grouped)) {
+    const summary = summaries[project] ?? "";
+    const high = counts.HIGH;
+    const mod = counts.MODERATE;
+    html += `
+      <div class="project-block">
+        <h3>${project} — ${high} Highly Useful and ${mod} Moderately Useful things.</h3>
+        ${summary ? `<p class="project-summary">${summary}</p>` : ""}
+      </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderHtml(date, items, usage, changelog = []) {
   const grouped = {};
   for (const it of items) {
     if (!grouped[it.project]) grouped[it.project] = { HIGH: [], MODERATE: [] };
     grouped[it.project][it.usefulness].push(it);
   }
 
-  const projectCounts = countByProject(items);
-  const newsSection = renderNewsHtml(projectMeta, projectCounts);
+  const projectOverview = renderProjectOverview(items);
 
   const sections = Object.entries(grouped).map(([project, groups]) => {
     const highCards = groups.HIGH.map((it) => `
@@ -268,8 +225,11 @@ function renderHtml(date, items, usage, changelog = [], projectMeta = {}) {
     .changelog h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #444; }
     .changelog ul { margin: 0; padding-left: 18px; }
     .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
-    .project-news { margin: 6px 20px; }
-    .project-summary { margin: 0 0 8px; font-size: 14px; color: #555; }
+    /* NEW: Project News styling */
+    .project-news { margin: 10px 20px; }
+    .project-news h2 { font-size: 18px; margin-bottom: 6px; }
+    .project-block h3 { margin: 2px 0; font-size: 16px; font-weight: 500; color: #222; }
+    .project-summary { margin: 0 0 8px; font-size: 13px; color: #666; }
   </style>
 </head>
 <body>
@@ -279,7 +239,7 @@ function renderHtml(date, items, usage, changelog = [], projectMeta = {}) {
       <div class="date">${date}</div>
     </div>
 
-    ${newsSection}
+    ${projectOverview}
 
     ${sections}
 
@@ -296,15 +256,12 @@ function renderHtml(date, items, usage, changelog = [], projectMeta = {}) {
 </html>`;
 }
 
-function renderText(date, items, usage, changelog = [], projectMeta = {}) {
-  const projectCounts = countByProject(items);
-  const newsText = renderNewsText(projectMeta, projectCounts);
-
+function renderText(date, items, usage, changelog = []) {
   let body;
   if (!items.length) {
     body = `Daily Digest – ${date}\n\nNo highly or moderately useful items today.\nStay Calm and Build On.`;
   } else {
-    body = `Daily Digest – ${date}\n\n${newsText}\n${items.map(it => `- ${it.title}
+    body = `Daily Digest – ${date}\n\n${items.map(it => `- ${it.title}
   URL: ${it.url}
   Usefulness: ${it.usefulness}
   Why: ${it.reason}
@@ -355,7 +312,6 @@ export async function digest() {
   const entries = buildUsefulEntries(knowledge);
   const usage = aggregateUsage(knowledge);
   const changelog = knowledge.changelog || [];
-  const projectMeta = await loadProjectMeta();
   const date = todayIsoDate();
   const stamp = safeFilenameDate();
 
@@ -364,8 +320,8 @@ export async function digest() {
   const latestDir = path.join(DIGEST_DIR, "latest");
   await ensureDir(runDir); await ensureDir(dailyDir); await ensureDir(latestDir);
 
-  const html = renderHtml(date, entries, usage, changelog, projectMeta);
-  const txt = renderText(date, entries, usage, changelog, projectMeta);
+  const html = renderHtml(date, entries, usage, changelog);
+  const txt = renderText(date, entries, usage, changelog);
   const json = renderJson(date, entries, usage);
 
   const files = {
@@ -407,5 +363,12 @@ export async function digest() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  digest().catch((err) => { console.error("Digest step failed", err); process.exitCode = 1; });
+  digest().
+// ... (entire file content above)
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  digest().catch((err) => {
+    console.error("Digest step failed", err);
+    process.exitCode = 1;
+ });
 }
