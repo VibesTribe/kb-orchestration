@@ -1,5 +1,6 @@
 import "dotenv/config";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureDir, loadJson } from "./lib/utils.js";
@@ -116,15 +117,16 @@ function renderProjectOverview(entries) {
     grouped[it.project][it.usefulness] += 1;
   }
 
-  // Load project summaries from project.json if available
+  // Load project summaries from project.json if available (sync read so this stays simple & safe)
   const projectDirs = ["projects/vibeflow"]; // future: scan dynamically
   const summaries = {};
   for (const dir of projectDirs) {
     try {
-      const pj = JSON.parse(require("fs").readFileSync(path.join(ROOT, dir, "project.json"), "utf8"));
-      summaries[pj.name] = pj.summary;
+      const raw = fsSync.readFileSync(path.join(ROOT, dir, "project.json"), "utf8");
+      const pj = JSON.parse(raw);
+      if (pj?.name && pj?.summary) summaries[pj.name] = pj.summary;
     } catch {
-      // ignore missing
+      // ignore missing or invalid
     }
   }
 
@@ -225,12 +227,12 @@ function renderHtml(date, items, usage, changelog = []) {
     .changelog h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #444; }
     .changelog ul { margin: 0; padding-left: 18px; }
     .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
-    /* Project News styling */
-    .project-news { margin: 6px 0 10px 0; text-align: center; }
+    /* Project News styling (only this block changed) */
+    .project-news { margin: 4px 0 10px 0; text-align: center; }
     .project-news-header { font-size: 18px; margin-bottom: 4px; }
-    .project-line { margin: 2px 0; font-size: 16px; color: #222; }
+    .project-line { margin: 2px 0; font-size: 16px; font-weight: 400; color: #222; }
     .project-counts { font-size: 14px; color: #333; }
-    .project-summary { margin: 0 0 6px; font-size: 13px; color: #666; }
+    .project-summary { margin: 2px 0 8px 0; font-size: 13px; color: #666; }
   </style>
 </head>
 <body>
