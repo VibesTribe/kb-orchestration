@@ -108,7 +108,7 @@ function renderUsageText(usage) {
   return lines.length ? `\n\nToken Usage:\n${lines.join("\n")}` : "";
 }
 
-function renderProjectOverview(entries, knowledge) {
+function renderProjectOverview(entries) {
   // Group entries by project
   const grouped = {};
   for (const it of entries) {
@@ -121,7 +121,7 @@ function renderProjectOverview(entries, knowledge) {
   const summaries = {};
   for (const dir of projectDirs) {
     try {
-      const pj = JSON.parse(fs.readFileSync(path.join(ROOT, dir, "project.json"), "utf8"));
+      const pj = JSON.parse(require("fs").readFileSync(path.join(ROOT, dir, "project.json"), "utf8"));
       summaries[pj.name] = pj.summary;
     } catch {
       // ignore missing
@@ -135,7 +135,7 @@ function renderProjectOverview(entries, knowledge) {
     const mod = counts.MODERATE;
     html += `
       <div class="project-block">
-        <h3>${project} — ${high} Highly Useful and ${mod} Moderately Useful things.</h3>
+        <p class="project-line"><strong>${project}</strong> — ${high} Highly Useful and ${mod} Moderately Useful things.</p>
         ${summary ? `<p class="project-summary">${summary}</p>` : ""}
       </div>`;
   }
@@ -228,7 +228,7 @@ function renderHtml(date, items, usage, changelog = []) {
     /* NEW: Project News styling */
     .project-news { margin: 10px 20px; }
     .project-news h2 { font-size: 18px; margin-bottom: 6px; }
-    .project-block h3 { margin: 2px 0; font-size: 16px; font-weight: 500; color: #222; }
+    .project-line { margin: 2px 0; font-size: 15px; font-weight: 500; color: #222; }
     .project-summary { margin: 0 0 8px; font-size: 13px; color: #666; }
   </style>
 </head>
@@ -368,4 +368,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
