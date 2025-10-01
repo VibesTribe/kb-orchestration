@@ -135,7 +135,7 @@ function renderProjectOverview(entries) {
     const mod = counts.MODERATE;
     html += `
       <div class="project-block">
-        <p class="project-line"><strong>${project}</strong> — ${high} Highly Useful and ${mod} Moderately Useful things.</p>
+        <p class="project-line">${project} — <span class="project-counts">${high} Highly Useful and ${mod} Moderately Useful things.</span></p>
         ${summary ? `<p class="project-summary">${summary}</p>` : ""}
       </div>`;
   }
@@ -225,11 +225,12 @@ function renderHtml(date, items, usage, changelog = []) {
     .changelog h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #444; }
     .changelog ul { margin: 0; padding-left: 18px; }
     .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
-    /* NEW: Project News styling */
-    .project-news { margin: 10px 0; text-align: center; }
-    .project-news-header { font-size: 18px; margin-bottom: 8px; }
-    .project-line { margin: 2px 0; font-size: 15px; font-weight: 500; color: #222; }
-    .project-summary { margin: 0 0 8px; font-size: 13px; color: #666; }
+    /* Project News styling */
+    .project-news { margin: 6px 0 10px 0; text-align: center; }
+    .project-news-header { font-size: 18px; margin-bottom: 4px; }
+    .project-line { margin: 2px 0; font-size: 16px; color: #222; }
+    .project-counts { font-size: 14px; color: #333; }
+    .project-summary { margin: 0 0 6px; font-size: 13px; color: #666; }
   </style>
 </head>
 <body>
