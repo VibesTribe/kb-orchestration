@@ -128,7 +128,7 @@ function renderProjectOverview(entries) {
     }
   }
 
-  let html = `<div class="project-news"><h2>News You Can Use</h2>`;
+  let html = `<div class="project-news"><h2 class="project-news-header">News You Can Use</h2>`;
   for (const [project, counts] of Object.entries(grouped)) {
     const summary = summaries[project] ?? "";
     const high = counts.HIGH;
@@ -226,8 +226,8 @@ function renderHtml(date, items, usage, changelog = []) {
     .changelog ul { margin: 0; padding-left: 18px; }
     .footer { text-align: center; padding: 6px 20px; font-size: 14px; color: #444; font-weight: 500; background: none; }
     /* NEW: Project News styling */
-    .project-news { margin: 10px 20px; }
-    .project-news h2 { font-size: 18px; margin-bottom: 6px; }
+    .project-news { margin: 10px 0; text-align: center; }
+    .project-news-header { font-size: 18px; margin-bottom: 8px; }
     .project-line { margin: 2px 0; font-size: 15px; font-weight: 500; color: #222; }
     .project-summary { margin: 0 0 8px; font-size: 13px; color: #666; }
   </style>
