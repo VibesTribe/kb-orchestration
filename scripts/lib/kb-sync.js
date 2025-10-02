@@ -16,6 +16,7 @@ import { Octokit } from "octokit";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const DATA = path.join(ROOT, "data");
+const PROJECTS_DIR = path.join(ROOT, "projects");
 
 // --- NEW: Pull the source-of-truth knowledge.json from knowledgebase repo
 export async function pullKnowledge() {
@@ -46,6 +47,53 @@ export async function pullKnowledge() {
     console.error("❌ pullKnowledge failed:", err.message);
     throw err;
   }
+}
+
+export async function pullProjects() {
+  const owner = "VibesTribe";
+  const repo = "knowledgebase";
+  const rootPath = "projects";
+
+  const token = process.env.ACTIONS_PAT;
+  if (!token) {
+    console.warn("⚠️ ACTIONS_PAT missing; cannot pull projects from knowledgebase repo.");
+    return;
+  }
+
+  const octokit = new Octokit({ auth: token });
+
+  async function downloadDir(remotePath, localPath) {
+    await fs.mkdir(localPath, { recursive: true });
+    const res = await octokit.rest.repos.getContent({ owner, repo, path: remotePath });
+    const entries = Array.isArray(res.data) ? res.data : [res.data];
+
+    for (const entry of entries) {
+      if (entry.type === "dir") {
+        await downloadDir(entry.path, path.join(localPath, entry.name));
+      } else if (entry.type === "file") {
+        const fileRes = await octokit.rest.repos.getContent({ owner, repo, path: entry.path });
+        const fileData = Array.isArray(fileRes.data) ? null : fileRes.data;
+        if (!fileData || typeof fileData.content !== "string") continue;
+        const buf = Buffer.from(fileData.content, fileData.encoding || "base64");
+        await fs.writeFile(path.join(localPath, entry.name), buf.toString("utf8"), "utf8");
+      }
+    }
+  }
+
+  try {
+    await octokit.rest.repos.getContent({ owner, repo, path: rootPath });
+  } catch (err) {
+    if (err.status === 404) {
+      console.warn("⚠️ No projects directory found in knowledgebase; keeping existing local projects");
+      return;
+    }
+    console.error("❌ pullProjects failed:", err.message);
+    throw err;
+  }
+
+  await fs.rm(PROJECTS_DIR, { recursive: true, force: true });
+  await downloadDir(rootPath, PROJECTS_DIR);
+  console.log(`✅ Pulled projects from ${owner}/${repo} → ${PROJECTS_DIR}`);
 }
 
 // Per-item / per-file update (incremental persistence)
