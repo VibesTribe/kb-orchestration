@@ -31,6 +31,10 @@ function log(msg, ctx = {}) {
   console.log(`[${ts}] ${msg}`, Object.keys(ctx).length ? ctx : "");
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
 // ---------- Throttling helper ----------
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -134,7 +138,8 @@ function upsertProjectClassification(item, project, data) {
     usefulness: data.usefulness,
     reason: data.reason,
     nextSteps: data.nextSteps,
-    modelUsed: data.modelUsed
+    modelUsed: data.modelUsed,
+    classifiedAt: data.classifiedAt ?? nowIso()
   };
   if (idx >= 0) {
     // Only fill missing fields; don't create duplicates
@@ -226,12 +231,14 @@ export async function classify(options = {}) {
         const usefulness = parseUsefulness(text);
         const reason = extractReason(text);
         const nextSteps = extractNextSteps(text);
+        const classifiedAt = nowIso();
 
         upsertProjectClassification(item, project, {
           usefulness,
           reason,
           nextSteps,
-          modelUsed: model
+          modelUsed: model,
+          classifiedAt
         });
 
         // --- NEW: per-item, per-project token usage in knowledge.json

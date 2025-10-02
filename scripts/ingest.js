@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import fetch from "node-fetch";
 import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
 import { pushUpdate, pullKnowledge } from "./lib/kb-sync.js";
+import { extractYouTubeVideoId, ensureTranscript } from "./lib/youtube-transcripts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -198,6 +199,30 @@ function isDuplicate(indexes, item) {
   );
 }
 
+async function ensureTranscriptForItem(item) {
+  const videoId = extractYouTubeVideoId(item);
+  if (!videoId) return;
+
+  try {
+    const result = await ensureTranscript(videoId);
+    if (result.emptyMarker) {
+      log(result.updated ? "Transcript unavailable; wrote marker" : "Transcript marker present", {
+        id: item.id,
+        videoId,
+      });
+    } else if (result.text) {
+      log(result.updated ? "Transcript fetched" : "Transcript cached", {
+        id: item.id,
+        videoId,
+      });
+    } else {
+      log("Transcript check complete", { id: item.id, videoId, status: result.status });
+    }
+  } catch (err) {
+    log("Transcript fetch failed", { id: item.id, videoId, error: err.message });
+  }
+}
+
 // ------- RAINDROP -------
 
 async function fetchRaindropCollectionItems(
@@ -259,6 +284,8 @@ async function ingestRaindropCollection(source, knowledge, indexes, state) {
           createdAt: it.created || it.createdAt || null,
           ingestedAt: nowIso(),
         };
+
+        await ensureTranscriptForItem(item);
 
         // Strict dedupe against knowledge.json
         if (!isDuplicate(indexes, item)) {
@@ -344,6 +371,8 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
           ingestedAt: nowIso(),
         };
 
+        await ensureTranscriptForItem(item);
+
         if (!isDuplicate(indexes, item)) {
           knowledge.items.push(item);
           indexes.byId.add(String(item.id));
@@ -428,6 +457,8 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
           publishedAt,
           ingestedAt: nowIso(),
         };
+
+        await ensureTranscriptForItem(item);
 
         if (!isDuplicate(indexes, item)) {
           knowledge.items.push(item);

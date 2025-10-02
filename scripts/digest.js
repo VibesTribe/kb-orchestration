@@ -3,13 +3,16 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureDir, loadJson } from "./lib/utils.js";
+import { ensureDir, loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DATA = path.join(ROOT, "data");
 const KNOWLEDGE_FILE = path.join(DATA, "knowledge.json");
 const DIGEST_DIR = path.join(DATA, "digest");
+const DIGEST_STATE_FILE = path.join(DATA, "cache", "digest-state.json");
+
+const DIGEST_WINDOW_HOURS = Number(process.env.DIGEST_WINDOW_HOURS ?? 24);
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL ?? "no-reply@example.com";
@@ -29,20 +32,33 @@ function safeFilenameDate() {
 }
 
 // ---- Choose the best classification per item (HIGH > MODERATE). Return null if none.
-function bestClass(item) {
+function parseIsoDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isRecentClass(cls, cutoff) {
+  const ts = parseIsoDate(cls?.classifiedAt);
+  if (!ts) return false;
+  return ts.getTime() >= cutoff.getTime();
+}
+
+function bestClass(item, cutoff) {
   const classes = Array.isArray(item.projects) ? item.projects : [];
-  const high = classes.find((p) => p.usefulness === "HIGH");
+  const recent = classes.filter((p) => isRecentClass(p, cutoff));
+  const high = recent.find((p) => p.usefulness === "HIGH");
   if (high) return high;
-  const moderate = classes.find((p) => p.usefulness === "MODERATE");
+  const moderate = recent.find((p) => p.usefulness === "MODERATE");
   if (moderate) return moderate;
   return null;
 }
 
 // ---- Build digest entries from knowledge.json
-function buildUsefulEntries(knowledge) {
+function buildUsefulEntries(knowledge, cutoff) {
   const out = [];
   for (const it of knowledge.items || []) {
-    const cls = bestClass(it);
+    const cls = bestClass(it, cutoff);
     if (!cls) continue;
     out.push({
       id: it.id,
@@ -53,7 +69,9 @@ function buildUsefulEntries(knowledge) {
       reason: cls.reason || "",
       nextSteps: cls.nextSteps || "",
       publishedAt: it.publishedAt || it.createdAt || "",
-      project: cls.project || "General"
+      project: cls.project || "General",
+      projectKey: cls.projectKey || null,
+      classifiedAt: cls.classifiedAt || null
     });
   }
   // Sort so HIGH always come before MODERATE
@@ -65,23 +83,40 @@ function buildUsefulEntries(knowledge) {
 }
 
 // ---- Aggregate token usage from knowledge.json (combined totals per model)
-function aggregateUsage(knowledge) {
+function aggregateUsage(entries, knowledge) {
   const totals = {};
+  if (!entries.length) return totals;
+
+  const map = new Map();
   for (const it of knowledge.items || []) {
-    if (it.usage?.enrich) {
-      const u = it.usage.enrich;
+    if (it?.id) map.set(it.id, it);
+  }
+
+  for (const entry of entries) {
+    const item = map.get(entry.id);
+    if (!item) continue;
+
+    if (item.usage?.enrich) {
+      const u = item.usage.enrich;
       const key = `${u.provider}:${u.model}`;
       totals[key] = totals[key] || { total: 0, count: 0 };
       totals[key].total += u.totalTokens || 0;
       totals[key].count += 1;
     }
-    if (it.usage?.classify) {
-      for (const [, u] of Object.entries(it.usage.classify)) {
-        const key = `${u.provider}:${u.model}`;
-        totals[key] = totals[key] || { total: 0, count: 0 };
-        totals[key].total += u.totalTokens || 0;
-        totals[key].count += 1;
+
+    const classifyUsage = (() => {
+      if (!item.usage?.classify) return null;
+      if (entry.projectKey && item.usage.classify[entry.projectKey]) {
+        return item.usage.classify[entry.projectKey];
       }
+      return item.usage.classify[entry.project] || null;
+    })();
+
+    if (classifyUsage) {
+      const key = `${classifyUsage.provider}:${classifyUsage.model}`;
+      totals[key] = totals[key] || { total: 0, count: 0 };
+      totals[key].total += classifyUsage.totalTokens || 0;
+      totals[key].count += 1;
     }
   }
   return totals;
@@ -312,8 +347,13 @@ async function sendBrevoEmail({ subject, textContent, htmlContent, recipients })
 
 export async function digest() {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
-  const entries = buildUsefulEntries(knowledge);
-  const usage = aggregateUsage(knowledge);
+  const state = await loadJson(DIGEST_STATE_FILE, {});
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - DIGEST_WINDOW_HOURS * 60 * 60 * 1000);
+  const lastDigest = parseIsoDate(state?.lastDigestAt);
+  const cutoff = lastDigest && lastDigest > windowStart ? lastDigest : windowStart;
+  const entries = buildUsefulEntries(knowledge, cutoff);
+  const usage = aggregateUsage(entries, knowledge);
   const changelog = knowledge.changelog || [];
   const date = todayIsoDate();
   const stamp = safeFilenameDate();
@@ -350,7 +390,15 @@ export async function digest() {
 
   const highCount = entries.filter((e) => e.usefulness === "HIGH").length;
   const modCount = entries.filter((e) => e.usefulness === "MODERATE").length;
-  log("Digest built", { date, count: entries.length, high: highCount, moderate: modCount, usage, changelog });
+  log("Digest built", {
+    date,
+    count: entries.length,
+    high: highCount,
+    moderate: modCount,
+    usage,
+    changelog,
+    cutoff: cutoff.toISOString()
+  });
 
   if (BREVO_API_KEY) {
     const recipients = BREVO_TO.split(/[,;\s]+/).filter(Boolean);
@@ -361,6 +409,9 @@ export async function digest() {
       await sendBrevoEmail({ subject, textContent: txt, htmlContent: html, recipients });
     }
   }
+
+  state.lastDigestAt = now.toISOString();
+  await saveJsonCheckpoint(DIGEST_STATE_FILE, state);
 
   return { date, files, dir: runDir, payload: json };
 }

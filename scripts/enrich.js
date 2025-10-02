@@ -11,25 +11,23 @@
 //   - Only include transcript in prompt if it has non-empty text
 //   - Push transcript files to KB repo via pushUpdate()
 
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import fetch from "node-fetch";
 
 import { callWithRotation } from "./lib/openrouter.js";
 import { callGemini } from "./lib/gemini.js";
 // import { callOpenAI } from "./lib/openai.js"; // ⛔ disabled
 import { callDeepSeek } from "./lib/deepseek.js";
 import { safeCall } from "./lib/guardrails.js";
-import { loadJson, saveJsonCheckpoint, ensureDir } from "./lib/utils.js";
+import { loadJson, saveJsonCheckpoint } from "./lib/utils.js";
 import { logStageUsage, estimateTokensFromText } from "./lib/token-usage.js";
-import { syncKnowledge, pushUpdate } from "./lib/kb-sync.js";
+import { syncKnowledge } from "./lib/kb-sync.js";
+import { extractYouTubeVideoId, ensureTranscript } from "./lib/youtube-transcripts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const KNOWLEDGE_FILE = path.join(ROOT, "data", "knowledge.json");
 const STATE_FILE = path.join(ROOT, "data/cache/enrich-state.json");
-const TRANSCRIPTS_DIR = path.join(ROOT, "data", "transcripts");
 
 // ---------- Logging ----------
 function log(msg, ctx = {}) {
@@ -40,109 +38,6 @@ function log(msg, ctx = {}) {
 // ---------- Helpers ----------
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function extractYouTubeVideoId(item) {
-  try {
-    if (typeof item.id === "string" && item.id.startsWith("youtube:video:")) {
-      return item.id.split(":").pop();
-    }
-    if (!item.url) return null;
-    const u = new URL(item.url);
-    if (u.searchParams.get("v")) return u.searchParams.get("v");
-    if (u.hostname.includes("youtu.be")) {
-      return u.pathname.replace("/", "").trim() || null;
-    }
-  } catch {}
-  return null;
-}
-
-function safeJoinText(arr) {
-  return arr.join(" ").replace(/\s+/g, " ").trim();
-}
-
-function parseTimedTextTracks(xml) {
-  const tracks = [];
-  const trackTagRegex = /<track\s+([^>]+?)\s*\/>/g;
-  const attrRegex = /(\w+)="([^"]*)"/g;
-  let m;
-  while ((m = trackTagRegex.exec(xml)) !== null) {
-    const attrs = {};
-    let a;
-    while ((a = attrRegex.exec(m[1])) !== null) attrs[a[1]] = a[2];
-    if (attrs.lang_code) tracks.push({ lang_code: attrs.lang_code, kind: attrs.kind || "" });
-  }
-  return tracks;
-}
-function pickBestTrack(tracks) {
-  if (!tracks.length) return null;
-  const en = tracks.filter((t) => t.lang_code.toLowerCase().startsWith("en"));
-  return en.find((t) => t.kind !== "asr") || en.find((t) => t.kind === "asr") || tracks[0];
-}
-
-async function fetchTranscriptTimedText(videoId) {
-  const listUrl = `https://www.youtube.com/api/timedtext?type=list&v=${encodeURIComponent(videoId)}`;
-  const listRes = await fetch(listUrl);
-  if (!listRes.ok) return null;
-  const listXml = await listRes.text();
-  const chosen = pickBestTrack(parseTimedTextTracks(listXml));
-  if (!chosen) return null;
-
-  // Try JSON3 first
-  try {
-    const jsonUrl = `https://www.youtube.com/api/timedtext?fmt=json3&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
-    const jsonRes = await fetch(jsonUrl);
-    if (jsonRes.ok) {
-      const j = await jsonRes.json();
-      const parts = [];
-      for (const ev of j.events || []) {
-        if (Array.isArray(ev.segs)) for (const seg of ev.segs) if (seg?.utf8) parts.push(seg.utf8);
-      }
-      const text = safeJoinText(parts);
-      if (text) return text;
-    }
-  } catch {}
-
-  // Fallback to VTT
-  try {
-    const vttUrl = `https://www.youtube.com/api/timedtext?fmt=vtt&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
-    const vttRes = await fetch(vttUrl);
-    if (vttRes.ok) {
-      const vtt = await vttRes.text();
-      const lines = vtt
-        .replace(/^WEBVTT.*$/m, "")
-        .split(/\r?\n/)
-        .filter(
-          (ln) =>
-            ln &&
-            !/^\d+$/.test(ln) &&
-            !/^\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}/.test(ln)
-        );
-      const text = safeJoinText(lines);
-      if (text) return text;
-    }
-  } catch {}
-
-  // Final fallback: SRV1 XML
-  try {
-    const srvUrl = `https://www.youtube.com/api/timedtext?fmt=srv1&v=${encodeURIComponent(videoId)}&lang=${encodeURIComponent(chosen.lang_code)}`;
-    const srvRes = await fetch(srvUrl);
-    if (srvRes.ok) {
-      const xml = await srvRes.text();
-      const lines = Array.from(xml.matchAll(/<text[^>]*>(.*?)<\/text>/g)).map((m) =>
-        m[1]
-          .replace(/&amp;/g, "&")
-          .replace(/&#39;/g, "'")
-          .replace(/&quot;/g, '"')
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-      );
-      const text = safeJoinText(lines);
-      if (text) return text;
-    }
-  } catch {}
-
-  return null;
 }
 
 function clamp(text, maxChars = 12000) {
@@ -198,43 +93,6 @@ function looksBad(txt = "") {
   return bad.some((p) => s.includes(p));
 }
 
-function transcriptFilePath(videoId) {
-  return path.join(TRANSCRIPTS_DIR, `${videoId}.txt`);
-}
-
-async function readCachedTranscript(videoId) {
-  try {
-    await ensureDir(TRANSCRIPTS_DIR);
-    const p = transcriptFilePath(videoId);
-    const st = await fs.stat(p);
-    if (st.size === 0) {
-      // empty marker → no transcript available (do not re-fetch)
-      return { path: p, text: null, exists: true, emptyMarker: true };
-    }
-    const raw = await fs.readFile(p, "utf8");
-    const text = raw.trim();
-    if (text.length > 0) {
-      return { path: p, text, exists: true, emptyMarker: false };
-    }
-    // empty/whitespace → treat as marker
-    return { path: p, text: null, exists: true, emptyMarker: true };
-  } catch {
-    return { path: transcriptFilePath(videoId), text: null, exists: false, emptyMarker: false };
-  }
-}
-
-async function writeTranscriptFile(p, text) {
-  await ensureDir(path.dirname(p));
-  const payload = (text && text.trim().length > 0) ? text : "";
-  await fs.writeFile(p, payload, "utf8");
-  const repoRel = path.posix.join("transcripts", path.basename(p));
-  try {
-    await pushUpdate(p, repoRel, payload ? "Add transcript" : "Mark no transcript");
-  } catch (e) {
-    console.warn("⚠️ pushUpdate transcript failed", { file: p, error: e?.message });
-  }
-}
-
 // ---------- Main enrichment ----------
 export async function enrich(options = {}) {
   const knowledge = await loadJson(KNOWLEDGE_FILE, { items: [] });
@@ -269,28 +127,22 @@ export async function enrich(options = {}) {
 
       if (videoId) {
         try {
-          const cached = await readCachedTranscript(videoId);
-          if (cached.exists) {
-            if (cached.emptyMarker) {
-              log("Transcript marker found (none available)", { id: item.id, videoId });
-              transcript = null;
-            } else {
-              log("Using cached transcript", { id: item.id, videoId });
-              transcript = cached.text;
-            }
+          const result = await ensureTranscript(videoId);
+          if (result.emptyMarker) {
+            const msg = result.updated
+              ? "No transcript available; wrote empty marker"
+              : "Transcript marker found (none available)";
+            log(msg, { id: item.id, videoId });
+            transcript = null;
+          } else if (result.text) {
+            log(result.updated ? "Fetched and cached transcript" : "Using cached transcript", {
+              id: item.id,
+              videoId,
+            });
+            transcript = result.text;
           } else {
-            // Not cached → attempt fetch once
-            const fetched = await fetchTranscriptTimedText(videoId);
-            if (fetched && fetched.trim().length > 0) {
-              transcript = fetched;
-              await writeTranscriptFile(cached.path, fetched);
-              log("Fetched and cached transcript", { id: item.id, videoId });
-            } else {
-              // Create empty marker to avoid re-fetch next runs
-              await writeTranscriptFile(cached.path, "");
-              transcript = null;
-              log("No transcript available; wrote empty marker", { id: item.id, videoId });
-            }
+            log("Transcript step completed without text", { id: item.id, videoId, status: result.status });
+            transcript = null;
           }
         } catch (e) {
           // Do not fail enrichment if transcript retrieval fails; just proceed without transcript
