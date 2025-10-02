@@ -145,6 +145,14 @@ function renderUsageText(usage) {
 }
 
 function renderProjectOverview(entries) {
+  if (!entries.length) {
+    return `
+      <div class="project-news">
+        <h2 class="project-news-header">News You Can Use</h2>
+        <p class="project-summary">Nothing new today. Stay Calm and Build On.</p>
+      </div>`;
+  }
+
   // Group entries by project
   const grouped = {};
   for (const it of entries) {
@@ -217,6 +225,15 @@ function renderHtml(date, items, usage, changelog = []) {
       </div>`;
   }).join("\n");
 
+  const sectionsContent = sections.trim().length
+    ? sections
+    : `
+    <div class="section">
+      <div class="digest-card moderate">
+        <p class="text">Nothing new today. Stay Calm and Build On.</p>
+      </div>
+    </div>`;
+
   const changelogSection = changelog.length
     ? `
     <div class="changelog">
@@ -279,7 +296,7 @@ function renderHtml(date, items, usage, changelog = []) {
 
     ${projectOverview}
 
-    ${sections}
+    ${sectionsContent}
 
     ${renderUsageHtml(usage)}
 
