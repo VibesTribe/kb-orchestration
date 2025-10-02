@@ -21,7 +21,7 @@ import { enrich } from "./enrich.js";
 import { classify } from "./classify.js";
 import { digest } from "./digest.js";
 import { publish } from "./publish.js";
-import { pullKnowledge, syncKnowledge, syncDigest } from "./lib/kb-sync.js";
+import { pullKnowledge, pullProjects, syncKnowledge, syncDigest } from "./lib/kb-sync.js";
 import { startUsageRun } from "./lib/token-usage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +66,13 @@ async function run() {
       await pullKnowledge();
     } catch (e) {
       log("⚠️ pullKnowledge failed; continuing with local knowledge.json", { error: e?.message });
+    }
+
+    log("📁 Pulling project definitions…");
+    try {
+      await pullProjects();
+    } catch (e) {
+      log("⚠️ pullProjects failed; continuing with local projects", { error: e?.message });
     }
 
     // 1) Ingest
