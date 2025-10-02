@@ -154,6 +154,12 @@ function shouldSkipByBackoff(srcState) {
   return today < srcState.skipUntil;
 }
 
+function hasRunToday(srcState) {
+  if (!srcState?.lastRun) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return srcState.lastRun.slice(0, 10) === today;
+}
+
 function markSuccess(srcState) {
   srcState.lastRun = nowIso();
   srcState.lastSuccess = srcState.lastRun;
@@ -258,6 +264,10 @@ async function ingestRaindropCollection(source, knowledge, indexes, state) {
   const sKey = `raindrop:${source.id}`;
   const srcState = getOrInitSourceState(state, sKey, source.mode);
   if (shouldSkipByBackoff(srcState)) return;
+  if (source.mode === "daily" && hasRunToday(srcState)) {
+    log("Raindrop already processed today; skipping", { collectionId: source.id });
+    return;
+  }
 
   const sinceDate = daysAgo(source.defaultWindow);
   let page = 0;
@@ -341,6 +351,10 @@ async function ingestYouTubePlaylist(source, knowledge, indexes, state) {
   const srcState = getOrInitSourceState(state, sKey, source.mode);
   if (shouldSkipByBackoff(srcState)) return;
   if (source.mode === "once" && srcState.lastSuccess) return;
+  if (source.mode === "daily" && hasRunToday(srcState)) {
+    log("YouTube playlist already processed today; skipping", { playlistId: source.id });
+    return;
+  }
 
   const afterIso = daysAgo(source.defaultWindow).toISOString();
   let pageToken = null;
@@ -429,6 +443,10 @@ async function ingestYouTubeChannel(source, knowledge, indexes, state) {
   const srcState = getOrInitSourceState(state, sKey, source.mode);
   if (shouldSkipByBackoff(srcState)) return;
   if (source.mode === "weekly-once" && !srcState.bootstrapPending && !isWeeklyWindow(srcState.lastRun)) return;
+  if (source.mode === "daily" && hasRunToday(srcState)) {
+    log("YouTube channel already processed today; skipping", { channelId: source.id });
+    return;
+  }
 
   const afterIso = daysAgo(source.defaultWindow).toISOString();
   let pageToken = null;
